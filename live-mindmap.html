@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Mind Map</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=IBM+Plex+Mono:wght@300;400;500&display=swap');
+
+*{margin:0;padding:0;box-sizing:border-box}
+
+:root {
+  --bg: #060610;
+  --panel: #0a0b14;
+  --card: rgba(255,255,255,0.03);
+  --bdr: rgba(255,255,255,0.06);
+  --txt: #c8cad4;
+  --dim: #484b5e;
+  --bright: #eeeef2;
+  --green: #34d399;
+  --purple: #a78bfa;
+  --rose: #fb7185;
+  --amber: #fbbf24;
+  --blue: #60a5fa;
+  --cyan: #22d3ee;
+  --teal: #2dd4bf;
+  --orange: #fb923c;
+  --pink: #f0abfc;
+  --lime: #a3e635;
+}
+
+body {
+  background: var(--bg);
+  color: var(--txt);
+  font-family: 'DM Sans', sans-serif;
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* ========== SETUP ========== */
+#setup {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+  transition: opacity .6s, visibility .6s;
+}
+#setup.gone { opacity: 0; visibility: hidden; pointer-events: none; }
+
+.setup-inner { width: 400px; }
+.setup-inner .tag {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px; font-weight: 400;
+  letter-spacing: 3px; text-transform: uppercase;
+  color: var(--green); margin-bottom: 10px;
+}
+.setup-inner h1 {
+  font-size: 32px; font-weight: 300;
+  color: var(--bright); margin-bottom: 40px;
+  letter-spacing: -0.5px;
+}
+.inp-group { margin-bottom: 22px; }
+.inp-group label {
+  display: block;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 6px;
+}
+.inp-group input {
+  width: 100%; padding: 13px 14px;
+  background: var(--card);
+  border: 1px solid var(--bdr);
+  border-radius: 8px;
+  color: var(--txt);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px; font-weight: 300;
+  outline: none; transition: border-color .25s;
+}
+.inp-group input:focus { border-color: rgba(52,211,153,0.5); }
+.inp-group input::placeholder { color: var(--dim); }
+.inp-group .sub {
+  font-size: 11px; color: var(--dim);
+  margin-top: 5px; line-height: 1.5;
+}
+#start-btn {
+  width: 100%; padding: 15px; margin-top: 16px;
+  background: var(--green); color: #060610;
+  border: none; border-radius: 8px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 3px; text-transform: uppercase;
+  cursor: pointer; transition: all .2s;
+}
+#start-btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+
+/* ========== MAIN LAYOUT ========== */
+#app {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  height: 100vh;
+  opacity: 0;
+  transition: opacity .7s ease .3s;
+}
+#app.on { opacity: 1; }
+
+/* ========== CANVAS ========== */
+#canvas {
+  position: relative; overflow: hidden;
+  background: var(--bg);
+}
+#canvas svg { width: 100%; height: 100%; display: block; }
+
+/* Subtle gradient atmosphere */
+.atmo {
+  position: absolute; pointer-events: none;
+  border-radius: 50%; filter: blur(100px);
+  opacity: 0.07; transition: all 5s ease;
+}
+.atmo.a1 { width: 500px; height: 500px; background: var(--purple); top: 15%; left: 25%; }
+.atmo.a2 { width: 400px; height: 400px; background: var(--green); bottom: 15%; right: 15%; }
+.atmo.a3 { width: 300px; height: 300px; background: var(--rose); top: 50%; left: 60%; }
+
+/* Status pill */
+#pill {
+  position: absolute; top: 24px; left: 24px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 18px 8px 14px;
+  background: rgba(10,11,20,0.8);
+  border: 1px solid var(--bdr);
+  border-radius: 100px;
+  backdrop-filter: blur(20px);
+  z-index: 10;
+}
+.led {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--dim); transition: all .4s;
+  flex-shrink: 0;
+}
+.led.on {
+  background: var(--green);
+  box-shadow: 0 0 10px rgba(52,211,153,0.6);
+  animation: pulse 3s ease infinite;
+}
+.led.think {
+  background: var(--purple);
+  box-shadow: 0 0 10px rgba(167,139,250,0.5);
+  animation: pulse .8s ease infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+#pill-text {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: .5px; color: var(--dim);
+}
+
+/* Counter */
+#counter {
+  position: absolute; bottom: 24px; left: 24px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; color: var(--dim);
+  letter-spacing: 1px;
+  z-index: 10;
+}
+
+/* ========== SIDEBAR ========== */
+#sidebar {
+  background: var(--panel);
+  border-left: 1px solid var(--bdr);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.side-head {
+  padding: 22px 22px 14px;
+  border-bottom: 1px solid var(--bdr);
+}
+.side-head h3 {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 2px; text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* Transcript */
+#transcript-box {
+  flex: 1; overflow-y: auto;
+  padding: 16px 22px;
+  font-size: 13px; line-height: 1.8;
+  color: var(--dim);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.04) transparent;
+}
+.t-chunk {
+  color: var(--txt);
+  display: inline;
+  animation: fadein .5s ease;
+}
+.t-chunk.faded { color: var(--dim); }
+@keyframes fadein {
+  from { opacity:0; transform: translateY(4px); }
+  to { opacity:1; transform: translateY(0); }
+}
+
+/* Concept log */
+#concepts {
+  max-height: 200px; overflow-y: auto;
+  padding: 12px 22px 14px;
+  border-top: 1px solid var(--bdr);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.04) transparent;
+}
+.con-head {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 2px; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 10px;
+}
+.con-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 0; font-size: 12px;
+  animation: fadein .4s ease;
+}
+.con-dot {
+  width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+}
+
+/* Controls */
+#ctrl-bar {
+  padding: 12px 22px;
+  border-top: 1px solid var(--bdr);
+  display: flex; gap: 6px;
+}
+.ctrl {
+  flex: 1; padding: 9px;
+  background: transparent;
+  border: 1px solid var(--bdr);
+  border-radius: 6px;
+  color: var(--dim);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 1px; text-transform: uppercase;
+  cursor: pointer; transition: all .2s;
+}
+.ctrl:hover { border-color: rgba(255,255,255,0.12); color: var(--txt); }
+.ctrl.active { border-color: var(--green); color: var(--green); }
+
+/* ========== D3 NODE STYLES ========== */
+
+/* Edges */
+.edge-path {
+  fill: none;
+  stroke: rgba(255,255,255,0.04);
+  stroke-width: 1;
+  stroke-dasharray: 0;
+}
+.edge-path.fresh {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: draw-edge 1.2s ease forwards;
+}
+@keyframes draw-edge {
+  to { stroke-dashoffset: 0; }
+}
+.edge-text {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 8px; font-weight: 300;
+  fill: rgba(255,255,255,0.12);
+  text-anchor: middle;
+  pointer-events: none;
+  letter-spacing: 0.5px;
+}
+
+/* Nodes */
+.n-group { cursor: grab; }
+.n-group:active { cursor: grabbing; }
+
+.n-aura {
+  opacity: 0;
+}
+.n-group.born .n-aura {
+  opacity: 1;
+  animation: aura-burst 1.8s ease forwards;
+}
+@keyframes aura-burst {
+  0% { opacity: 0.25; r: 50; }
+  100% { opacity: 0; r: 60; }
+}
+
+.n-outer {
+  fill: none;
+  stroke-width: 1;
+  opacity: 0.3;
+}
+.n-inner {
+  opacity: 0.08;
+}
+.n-dot {
+  opacity: 0.95;
+}
+
+.n-label {
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 500;
+  font-size: 11px;
+  fill: var(--bright);
+  text-anchor: middle;
+  pointer-events: none;
+  letter-spacing: 0.2px;
+}
+.n-cat {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 300;
+  font-size: 8px;
+  fill: var(--dim);
+  text-anchor: middle;
+  pointer-events: none;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* Birth animation */
+.n-group.born {
+  animation: node-pop .8s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes node-pop {
+  0% { transform: scale(0); opacity: 0; }
+  50% { transform: scale(1.2); opacity: 0.8; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* Breathing */
+@keyframes breathe {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.18; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SETUP ===== -->
+<div id="setup">
+  <div class="setup-inner">
+    <div class="tag">Live Mind Map</div>
+    <h1>AI in the Room</h1>
+    <div class="inp-group">
+      <label>Claude API Key</label>
+      <input type="password" id="f-key" placeholder="sk-ant-..." autocomplete="off">
+    </div>
+    <div class="inp-group">
+      <label>Meeting Topic</label>
+      <input type="text" id="f-topic" placeholder="e.g. Q1 Strategy Kickoff (optional)">
+    </div>
+    <div class="inp-group">
+      <label>STT Server</label>
+      <input type="text" id="f-ws" value="ws://localhost:8765">
+      <div class="sub">Run stt_server.py first. Clear this field to use browser mic.</div>
+    </div>
+    <button id="start-btn">Connect</button>
+  </div>
+</div>
+
+<!-- ===== APP ===== -->
+<div id="app">
+  <div id="canvas">
+    <div class="atmo a1"></div>
+    <div class="atmo a2"></div>
+    <div class="atmo a3"></div>
+    <div id="pill">
+      <div class="led" id="led"></div>
+      <span id="pill-text">Connecting...</span>
+    </div>
+    <div id="counter">0 concepts</div>
+    <svg id="viz"></svg>
+  </div>
+  <div id="sidebar">
+    <div class="side-head"><h3>Transcript</h3></div>
+    <div id="transcript-box"></div>
+    <div id="concepts">
+      <div class="con-head">Concepts</div>
+    </div>
+    <div id="ctrl-bar">
+      <button class="ctrl" id="c-pause">Pause</button>
+      <button class="ctrl" id="c-reset">Reset</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── Config ───
+const C = {
+  interval: 20000,
+  minLen: 50,
+  maxN: 30,
+  model: 'claude-sonnet-4-20250514',
+  colors: [
+    '#34d399','#a78bfa','#fb7185','#fbbf24','#60a5fa',
+    '#22d3ee','#fb923c','#f0abfc','#2dd4bf','#a3e635'
+  ],
+};
+
+// ─── State ───
+const G = {
+  key:'', topic:'', wsUrl:'', ws:null,
+  txt:'', sent:0, busy:false, paused:false,
+  nodes:[], edges:[], cmap:{}, ci:0, fb:null,
+};
+
+// ─── STT ───
+function connectWS() {
+  if (!G.wsUrl) { fallbackMic(); return; }
+  G.ws = new WebSocket(G.wsUrl);
+  G.ws.onopen = () => status('on','Listening via local STT');
+  G.ws.onclose = () => {
+    status('','STT disconnected');
+    setTimeout(() => { if (!G.paused) connectWS(); }, 3000);
+  };
+  G.ws.onerror = () => {
+    console.warn('WS failed, fallback to browser');
+    status('','Using browser mic (fallback)');
+    fallbackMic();
+  };
+  G.ws.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'transcript' && d.text) {
+      G.txt += d.text + ' ';
+      pushChunk(d.text);
+    }
+  };
+}
+
+function fallbackMic() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { status('','No speech input'); return; }
+  const r = new SR();
+  r.continuous = true; r.interimResults = false; r.lang = 'en-US';
+  r.onresult = e => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        const t = e.results[i][0].transcript;
+        G.txt += t + ' ';
+        pushChunk(t);
+      }
+    }
+  };
+  r.onend = () => { if (!G.paused) try { r.start(); } catch(e){} };
+  r.onerror = () => { if (!G.paused) setTimeout(() => { try { r.start(); } catch(e){} }, 500); };
+  r.start(); G.fb = r;
+  status('on','Listening via browser mic');
+}
+
+// ─── Transcript UI ───
+function pushChunk(t) {
+  const box = document.getElementById('transcript-box');
+  box.querySelectorAll('.t-chunk:not(.faded)').forEach(c => c.classList.add('faded'));
+  const s = document.createElement('span');
+  s.className = 't-chunk';
+  s.textContent = t + ' ';
+  box.appendChild(s);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ─── LLM ───
+async function analyze() {
+  if (G.busy || G.paused) return;
+  const fresh = G.txt.slice(G.sent).trim();
+  if (fresh.length < C.minLen) return;
+
+  G.busy = true;
+  status('think','Mapping concepts...');
+
+  const curGraph = {
+    nodes: G.nodes.map(n => ({id:n.id, label:n.label, group:n.group})),
+    edges: G.edges.map(e => ({
+      source: typeof e.source === 'object' ? e.source.id : e.source,
+      target: typeof e.target === 'object' ? e.target.id : e.target,
+      label: e.label
+    })),
+  };
+
+  const sys = `You generate mind-map graphs from meeting transcripts. Return ONLY valid JSON.
+
+Rules:
+- Max ${C.maxN} nodes. Merge lesser concepts to stay under limit.
+- Node: {"id":"n1","label":"Short Name","group":"Category"}
+  - label: 2-4 words, title case
+  - group: broad category for color clustering
+- Edge: {"source":"n1","target":"n2","label":"verb"}
+  - label: 1-2 word relationship (e.g. "drives", "enables", "part of")
+- Preserve existing node IDs. Add only genuinely important new concepts.
+- Remove nodes that are no longer relevant as the conversation evolves.
+- Create edges that reveal the STRUCTURE of the discussion, not just proximity.
+${G.topic ? `- Meeting context: "${G.topic}"` : ''}
+
+Return: {"nodes":[...],"edges":[...]}`;
+
+  const usr = `CURRENT GRAPH:\n${JSON.stringify(curGraph)}\n\nNEW SEGMENT:\n"${fresh}"\n\nFULL TRANSCRIPT:\n"${G.txt}"\n\nReturn the updated graph.`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type':'application/json',
+        'x-api-key': G.key,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
+      body: JSON.stringify({
+        model: C.model, max_tokens: 2000,
+        system: sys,
+        messages: [{role:'user', content:usr}]
+      })
+    });
+    if (!r.ok) { console.error('API', r.status); G.busy=false; status('on','Listening'); return; }
+    const d = await r.json();
+    const raw = d.content.map(c => c.text||'').join('');
+    const g = JSON.parse(raw.replace(/```json\s*/g,'').replace(/```\s*/g,'').trim());
+    if (g.nodes && g.edges) { applyGraph(g); G.sent = G.txt.length; }
+  } catch(e) { console.error('LLM:', e); }
+
+  G.busy = false;
+  if (!G.paused) status('on', G.ws && G.ws.readyState===1 ? 'Listening via local STT' : 'Listening');
+}
+
+// ─── Graph data ───
+function color(group) {
+  if (!G.cmap[group]) G.cmap[group] = C.colors[G.ci++ % C.colors.length];
+  return G.cmap[group];
+}
+
+function applyGraph(g) {
+  const prev = new Set(G.nodes.map(n=>n.id));
+  const nids = new Set(g.nodes.map(n=>n.id));
+
+  G.nodes = g.nodes.map(n => {
+    const o = G.nodes.find(x => x.id === n.id);
+    return {
+      ...n,
+      x: o ? o.x : W/2 + (Math.random()-.5)*200,
+      y: o ? o.y : H/2 + (Math.random()-.5)*200,
+      vx: o ? o.vx : 0, vy: o ? o.vy : 0,
+      isNew: !prev.has(n.id),
+      color: color(n.group),
+    };
+  });
+
+  const prevEdgeKeys = new Set(G.edges.map(e => {
+    const s = typeof e.source === 'object' ? e.source.id : e.source;
+    const t = typeof e.target === 'object' ? e.target.id : e.target;
+    return s + '->' + t;
+  }));
+
+  G.edges = g.edges.filter(e => {
+    const s = e.source?.id || e.source;
+    const t = e.target?.id || e.target;
+    return nids.has(s) && nids.has(t);
+  }).map(e => {
+    const s = e.source?.id || e.source;
+    const t = e.target?.id || e.target;
+    return {
+      source: s, target: t,
+      label: e.label || '',
+      isNew: !prevEdgeKeys.has(s + '->' + t),
+    };
+  });
+
+  G.nodes.filter(n => n.isNew).forEach(n => logConcept(n.label, n.color));
+  document.getElementById('counter').textContent = G.nodes.length + ' concepts';
+  render();
+}
+
+function logConcept(label, col) {
+  const box = document.getElementById('concepts');
+  const d = document.createElement('div');
+  d.className = 'con-item';
+  d.innerHTML = `<span class="con-dot" style="background:${col}"></span><span>${label}</span>`;
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ─── D3 Viz ───
+let svg, sim, gEdge, gNode, W, H;
+
+function initViz() {
+  const wrap = document.getElementById('canvas');
+  W = wrap.clientWidth; H = wrap.clientHeight;
+  svg = d3.select('#viz').attr('width', W).attr('height', H);
+
+  // ── Defs ──
+  const defs = svg.append('defs');
+
+  // Glow filter
+  const glow = defs.append('filter').attr('id','glow')
+    .attr('x','-50%').attr('y','-50%').attr('width','200%').attr('height','200%');
+  glow.append('feGaussianBlur').attr('stdDeviation','5').attr('result','b');
+  const fm = glow.append('feMerge');
+  fm.append('feMergeNode').attr('in','b');
+  fm.append('feMergeNode').attr('in','SourceGraphic');
+
+  // Soft halo filter
+  const halo = defs.append('filter').attr('id','halo')
+    .attr('x','-200%').attr('y','-200%').attr('width','500%').attr('height','500%');
+  halo.append('feGaussianBlur').attr('stdDeviation','30');
+
+  gEdge = svg.append('g');
+  gNode = svg.append('g');
+
+  sim = d3.forceSimulation()
+    .force('link', d3.forceLink().id(d=>d.id).distance(180).strength(0.3))
+    .force('charge', d3.forceManyBody().strength(-600).distanceMax(500))
+    .force('center', d3.forceCenter(W/2, H/2).strength(0.03))
+    .force('collide', d3.forceCollide().radius(65).strength(0.8))
+    .force('x', d3.forceX(W/2).strength(0.015))
+    .force('y', d3.forceY(H/2).strength(0.015))
+    .alphaDecay(0.02)
+    .velocityDecay(0.4)
+    .on('tick', tick);
+
+  window.addEventListener('resize', () => {
+    W = wrap.clientWidth; H = wrap.clientHeight;
+    svg.attr('width', W).attr('height', H);
+    sim.force('center', d3.forceCenter(W/2, H/2));
+    sim.force('x', d3.forceX(W/2).strength(0.015));
+    sim.force('y', d3.forceY(H/2).strength(0.015));
+    sim.alpha(0.15).restart();
+  });
+}
+
+function render() {
+  // ── Edges ──
+  const eData = gEdge.selectAll('.e-group').data(G.edges, d => d.source + '->' + d.target);
+  eData.exit().transition().duration(400).style('opacity',0).remove();
+
+  const eEnter = eData.enter().append('g').attr('class','e-group').style('opacity',0);
+
+  eEnter.append('path')
+    .attr('class', d => 'edge-path' + (d.isNew ? ' fresh' : ''));
+
+  eEnter.append('text').attr('class','edge-text').text(d => d.label);
+
+  eEnter.transition().duration(800).style('opacity',1);
+
+  // Update edge labels
+  eData.select('.edge-text').text(d => d.label);
+
+  // ── Nodes ──
+  const nData = gNode.selectAll('.n-group').data(G.nodes, d => d.id);
+  nData.exit().transition().duration(400).style('opacity',0).attr('transform', d => `translate(${d.x},${d.y}) scale(0)`).remove();
+
+  const nEnter = nData.enter().append('g')
+    .attr('class', d => 'n-group' + (d.isNew ? ' born' : ''))
+    .style('opacity', d => d.isNew ? 0 : 1)
+    .call(d3.drag()
+      .on('start', (e,d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
+      .on('drag', (e,d) => { d.fx=e.x; d.fy=e.y; })
+      .on('end', (e,d) => { if (!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; })
+    );
+
+  // Aura (bloom on birth)
+  nEnter.append('circle').attr('class','n-aura')
+    .attr('r', 45).attr('fill', d=>d.color).attr('filter','url(#halo)');
+
+  // Outer ring
+  nEnter.append('circle').attr('class','n-outer')
+    .attr('r', 24).attr('stroke', d=>d.color);
+
+  // Inner fill
+  nEnter.append('circle').attr('class','n-inner')
+    .attr('r', 20).attr('fill', d=>d.color);
+
+  // Bright core
+  nEnter.append('circle').attr('class','n-dot')
+    .attr('r', 3).attr('fill', d=>d.color).attr('filter','url(#glow)');
+
+  // Label
+  nEnter.append('text').attr('class','n-label').attr('dy', 40).text(d=>d.label);
+
+  // Category
+  nEnter.append('text').attr('class','n-cat').attr('dy', 52).text(d=>d.group);
+
+  // Animate new in
+  nEnter.filter(d=>d.isNew).transition().duration(700).ease(d3.easeCubicOut).style('opacity',1);
+
+  // Clear birth class
+  setTimeout(() => {
+    gNode.selectAll('.born').classed('born', false);
+    G.nodes.forEach(n => n.isNew = false);
+    G.edges.forEach(e => e.isNew = false);
+  }, 2000);
+
+  // Merge & update
+  const merged = nEnter.merge(nData);
+  merged.select('.n-label').text(d=>d.label);
+  merged.select('.n-cat').text(d=>d.group);
+  merged.select('.n-outer').attr('stroke', d=>d.color);
+  merged.select('.n-inner').attr('fill', d=>d.color);
+  merged.select('.n-dot').attr('fill', d=>d.color);
+  merged.select('.n-aura').attr('fill', d=>d.color);
+
+  sim.nodes(G.nodes);
+  sim.force('link').links(G.edges);
+  sim.alpha(0.4).restart();
+}
+
+function tick() {
+  // Curved edges
+  gEdge.selectAll('.edge-path').attr('d', d => {
+    const dx = d.target.x - d.source.x;
+    const dy = d.target.y - d.source.y;
+    const dr = Math.sqrt(dx*dx + dy*dy) * 1.5;
+    return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+  });
+
+  gEdge.selectAll('.edge-text')
+    .attr('x', d => (d.source.x + d.target.x) / 2 + (d.target.y - d.source.y) * 0.06)
+    .attr('y', d => (d.source.y + d.target.y) / 2 - (d.target.x - d.source.x) * 0.06);
+
+  gNode.selectAll('.n-group')
+    .attr('transform', d => `translate(${d.x},${d.y})`);
+}
+
+// ─── Status ───
+function status(mode, text) {
+  const led = document.getElementById('led');
+  led.className = 'led' + (mode === 'on' ? ' on' : mode === 'think' ? ' think' : '');
+  document.getElementById('pill-text').textContent = text;
+}
+
+// ─── Ambient breathing ───
+setInterval(() => {
+  document.querySelectorAll('.atmo').forEach(el => {
+    el.style.transform = `translate(${(Math.random()-.5)*50}px, ${(Math.random()-.5)*50}px)`;
+    el.style.opacity = 0.04 + Math.random() * 0.06;
+  });
+  if (gNode) {
+    gNode.selectAll('.n-outer')
+      .transition().duration(3000 + Math.random()*2000).ease(d3.easeSinInOut)
+      .attr('r', 22 + Math.random()*4).attr('opacity', 0.18 + Math.random()*0.15)
+      .transition().duration(3000)
+      .attr('r', 24).attr('opacity', 0.3);
+  }
+}, 5000);
+
+// ─── Init ───
+document.getElementById('start-btn').addEventListener('click', () => {
+  // Strip non-ASCII characters (zero-width spaces, smart quotes, etc.)
+  const k = document.getElementById('f-key').value.replace(/[^\x20-\x7E]/g, '').trim();
+  if (!k.startsWith('sk-ant-')) {
+    document.getElementById('f-key').style.borderColor = 'var(--rose)';
+    document.getElementById('f-key').placeholder = 'must start with sk-ant-';
+    return;
+  }
+  G.key = k;
+  G.topic = document.getElementById('f-topic').value.trim();
+  G.wsUrl = document.getElementById('f-ws').value.trim();
+
+  document.getElementById('setup').classList.add('gone');
+  document.getElementById('app').classList.add('on');
+
+  initViz();
+  connectWS();
+  setInterval(analyze, C.interval);
+});
+
+['f-key','f-topic','f-ws'].forEach(id =>
+  document.getElementById(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('start-btn').click();
+  })
+);
+
+document.getElementById('c-pause').addEventListener('click', () => {
+  G.paused = !G.paused;
+  const b = document.getElementById('c-pause');
+  b.textContent = G.paused ? 'Resume' : 'Pause';
+  b.classList.toggle('active', G.paused);
+  status(G.paused ? '' : 'on', G.paused ? 'Paused' : 'Listening');
+});
+
+document.getElementById('c-reset').addEventListener('click', () => {
+  if (!confirm('Reset the mind map?')) return;
+  G.nodes=[]; G.edges=[]; G.sent=0; G.ci=0; G.cmap={};
+  gEdge.selectAll('*').remove();
+  gNode.selectAll('*').remove();
+  document.querySelectorAll('#concepts .con-item').forEach(e=>e.remove());
+  document.getElementById('counter').textContent = '0 concepts';
+  sim.nodes([]); sim.force('link').links([]);
+});
+</script>
+</body>
+</html>
