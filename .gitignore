@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment and secrets
+.env
+.env.*
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# macOS
+.DS_Store
+
+# Editors/IDE
+.vscode/
+.idea/
+
+# Local tool config
+.claude/
