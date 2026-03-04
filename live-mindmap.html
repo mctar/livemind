@@ -543,6 +543,8 @@ const G = {
   _ctxNode: null,
   // Display mode
   bigscreen: false,
+  // Reset generation — bumped on every reset to discard stale analysis results
+  _gen: 0,
 };
 
 // ─── Session API ───
@@ -576,7 +578,9 @@ async function endCurrentSession() {
 async function startFreshSession() {
   // End current session on server (stores final snapshot + all data)
   await endCurrentSession();
-  // Clear local state
+  // Clear local state — full clean slate
+  G._gen++;  // invalidate any in-flight analysis
+  G._claudeCbs = {};  // drop pending Claude callbacks
   G.nodes=[]; G.edges=[]; G.txt=''; G.sent=0; G.ci=0; G.cmap={}; G.summary='';
   G.sessionId=null; G.lastSeq=0; G.mergeSource=null;
   G.busy=false; G.degraded=false;
@@ -649,11 +653,14 @@ function connectWS() {
     } else if (d.type === 'graph_update' && d.graph) {
       applyGraph(d.graph);
     } else if (d.type === 'session_reset') {
-      // Server-initiated reset (e.g. from admin panel)
+      // Server-initiated reset — full clean slate
+      G._gen++;  // invalidate any in-flight analysis
+      G._claudeCbs = {};  // drop all pending Claude callbacks
       G.nodes=[]; G.edges=[]; G.txt=''; G.sent=0; G.ci=0; G.cmap={}; G.summary='';
       G.sessionId = d.session_id; G.lastSeq=0; G.mergeSource=null;
       G.busy=false; G.degraded=false;
-      if (gNode) gEdge.selectAll('*').remove();
+      if (G.degradedRecoveryTimer) { clearTimeout(G.degradedRecoveryTimer); G.degradedRecoveryTimer=null; }
+      if (gEdge) gEdge.selectAll('*').remove();
       if (gNode) gNode.selectAll('*').remove();
       document.getElementById('transcript-box').innerHTML = '';
       document.querySelectorAll('#concepts .con-item').forEach(e=>e.remove());
@@ -777,6 +784,7 @@ async function analyze() {
   if (fresh.length < C.minLen) return;
 
   G.busy = true;
+  const gen = G._gen;  // snapshot generation before async work
   status('think','Mapping concepts...');
 
   const curGraph = {
@@ -819,6 +827,7 @@ Return: {"nodes":[...],"edges":[...],"summary":"<2-3 sentence summary of all key
         status('think', `Retrying analysis (${attempt}/${MAX_RETRIES})...`);
       }
       const d = await callClaude(body);
+      if (gen !== G._gen) break;  // reset happened — discard stale result
       const raw = d.content.map(c => c.text||'').join('');
       const g = JSON.parse(raw.replace(/```json\s*/g,'').replace(/```\s*/g,'').trim());
       if (g.nodes && g.edges) {

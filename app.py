@@ -157,12 +157,19 @@ async def end_session(session_id: str, request: Request):
     if reconciler.nodes:
         await db.store_snapshot(session_id, _seq_counter, reconciler.get_full_state(), "end")
     await db.end_session(session_id, summary)
-    # Reset server state for next session
+    # Reset server state
     reconciler.nodes.clear()
     reconciler.edges.clear()
     reconciler._mention_log.clear()
     reconciler._churn_log.clear()
     _summary = ""
+    with _seq_lock:
+        _seq_counter = 0
+    while not transcript_queue.empty():
+        try:
+            transcript_queue.get_nowait()
+        except Exception:
+            break
     if _current_session_id == session_id:
         _current_session_id = None
     return JSONResponse({"ok": True, "session_id": session_id})
@@ -211,12 +218,20 @@ async def new_session(request: Request):
         if reconciler.nodes:
             await db.store_snapshot(_current_session_id, _seq_counter, reconciler.get_full_state(), "end")
         await db.end_session(_current_session_id, _summary)
-    # Reset state
+    # Reset all state
     reconciler.nodes.clear()
     reconciler.edges.clear()
     reconciler._mention_log.clear()
     reconciler._churn_log.clear()
     _summary = ""
+    with _seq_lock:
+        _seq_counter = 0
+    # Drain any leftover transcript messages from STT queue
+    while not transcript_queue.empty():
+        try:
+            transcript_queue.get_nowait()
+        except Exception:
+            break
     # Create new
     session_id = str(uuid.uuid4())[:8]
     session = await db.create_session(session_id, topic)
