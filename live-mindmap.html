@@ -378,6 +378,77 @@ body {
   0%, 100% { opacity: 0.3; }
   50% { opacity: 0.18; }
 }
+
+/* ========== BIG SCREEN MODE ========== */
+.bigscreen {
+  --bg: #0c0c1a;
+  --panel: #101120;
+  --bdr: rgba(255,255,255,0.08);
+  --txt: #d4d6e0;
+  --dim: #6b6f88;
+  --bright: #f4f4f8;
+}
+.bigscreen .edge-path {
+  stroke: rgba(255,255,255,0.08);
+  stroke-width: 1.5;
+}
+.bigscreen .edge-text {
+  font-size: 11px;
+  fill: rgba(255,255,255,0.22);
+}
+.bigscreen .n-outer {
+  stroke-width: 1.5;
+  opacity: 0.45;
+}
+.bigscreen .n-inner {
+  opacity: 0.12;
+}
+.bigscreen .n-dot {
+  opacity: 1;
+}
+.bigscreen .n-label {
+  font-size: 16px;
+  font-weight: 600;
+}
+.bigscreen .n-cat {
+  font-size: 11px;
+  fill: var(--dim);
+}
+.bigscreen .n-group.pinned .n-outer {
+  stroke-width: 3;
+  opacity: 0.7;
+}
+.bigscreen #pill {
+  padding: 10px 22px 10px 16px;
+}
+.bigscreen #pill-text {
+  font-size: 12px;
+}
+.bigscreen #counter {
+  font-size: 13px;
+}
+.bigscreen #ctx-menu button {
+  font-size: 13px;
+  padding: 10px 18px;
+}
+
+/* Big screen mode indicator */
+#mode-badge {
+  position: absolute; top: 24px; right: 24px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--dim);
+  padding: 6px 14px;
+  background: rgba(10,11,20,0.6);
+  border: 1px solid var(--bdr);
+  border-radius: 100px;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity .4s;
+  pointer-events: none;
+}
+#mode-badge.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -419,6 +490,7 @@ body {
       <span id="pill-text">Connecting...</span>
     </div>
     <div id="counter">0 concepts</div>
+    <div id="mode-badge">Big Screen</div>
     <svg id="viz"></svg>
     <div id="ctx-menu">
       <button data-action="pin">Pin / Unpin</button>
@@ -469,6 +541,8 @@ const G = {
   mergeSource: null,
   // New: context menu target
   _ctxNode: null,
+  // Display mode
+  bigscreen: false,
 };
 
 // ─── Session API ───
@@ -968,16 +1042,17 @@ function render() {
     )
     .on('contextmenu', (e, d) => showContextMenu(e, d));
 
+  const s = G.bigscreen ? BS.big : BS.normal;
   nEnter.append('circle').attr('class','n-aura')
-    .attr('r', 45).attr('fill', d=>d.color).attr('filter','url(#halo)');
+    .attr('r', s.aura).attr('fill', d=>d.color).attr('filter','url(#halo)');
   nEnter.append('circle').attr('class','n-outer')
-    .attr('r', 24).attr('stroke', d=>d.color);
+    .attr('r', s.outer).attr('stroke', d=>d.color);
   nEnter.append('circle').attr('class','n-inner')
-    .attr('r', 20).attr('fill', d=>d.color);
+    .attr('r', s.inner).attr('fill', d=>d.color);
   nEnter.append('circle').attr('class','n-dot')
-    .attr('r', 3).attr('fill', d=>d.color).attr('filter','url(#glow)');
-  nEnter.append('text').attr('class','n-label').attr('dy', 40).text(d=>d.label);
-  nEnter.append('text').attr('class','n-cat').attr('dy', 52).text(d=>d.group);
+    .attr('r', s.dot).attr('fill', d=>d.color).attr('filter','url(#glow)');
+  nEnter.append('text').attr('class','n-label').attr('dy', s.labelDy).text(d=>d.label);
+  nEnter.append('text').attr('class','n-cat').attr('dy', s.catDy).text(d=>d.group);
 
   nEnter.filter(d=>d.isNew).transition().duration(700).ease(d3.easeCubicOut).style('opacity',1);
 
@@ -1045,6 +1120,43 @@ function _fpsLoop() {
 }
 requestAnimationFrame(_fpsLoop);
 
+// ─── Big screen mode ───
+const BS = {
+  normal: { aura: 45, outer: 24, inner: 20, dot: 3, labelDy: 40, catDy: 52, linkDist: 180, charge: -600, collide: 65 },
+  big:    { aura: 70, outer: 38, inner: 32, dot: 5, labelDy: 58, catDy: 74, linkDist: 280, charge: -1000, collide: 100 },
+};
+
+function toggleBigScreen() {
+  G.bigscreen = !G.bigscreen;
+  document.getElementById('app').classList.toggle('bigscreen', G.bigscreen);
+  const badge = document.getElementById('mode-badge');
+  badge.classList.add('show');
+  badge.textContent = G.bigscreen ? 'Big Screen' : 'Normal';
+  setTimeout(() => badge.classList.remove('show'), 2000);
+
+  const s = G.bigscreen ? BS.big : BS.normal;
+
+  // Update simulation forces
+  sim.force('link').distance(s.linkDist);
+  sim.force('charge').strength(s.charge);
+  sim.force('collide').radius(s.collide);
+
+  // Update all existing node elements
+  gNode.selectAll('.n-aura').attr('r', s.aura);
+  gNode.selectAll('.n-outer').attr('r', s.outer);
+  gNode.selectAll('.n-inner').attr('r', s.inner);
+  gNode.selectAll('.n-dot').attr('r', s.dot);
+  gNode.selectAll('.n-label').attr('dy', s.labelDy);
+  gNode.selectAll('.n-cat').attr('dy', s.catDy);
+
+  sim.alpha(0.3).restart();
+}
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'm' || e.key === 'M') toggleBigScreen();
+});
+
 // ─── Ambient breathing ───
 setInterval(() => {
   document.querySelectorAll('.atmo').forEach(el => {
@@ -1052,11 +1164,12 @@ setInterval(() => {
     el.style.opacity = 0.04 + Math.random() * 0.06;
   });
   if (gNode) {
+    const base = G.bigscreen ? BS.big.outer : BS.normal.outer;
     gNode.selectAll('.n-outer')
       .transition().duration(3000 + Math.random()*2000).ease(d3.easeSinInOut)
-      .attr('r', 22 + Math.random()*4).attr('opacity', 0.18 + Math.random()*0.15)
+      .attr('r', base - 2 + Math.random()*4).attr('opacity', 0.18 + Math.random()*0.15)
       .transition().duration(3000)
-      .attr('r', 24).attr('opacity', 0.3);
+      .attr('r', base).attr('opacity', G.bigscreen ? 0.45 : 0.3);
   }
 }, 5000);
 
