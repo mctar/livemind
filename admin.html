@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Mind Map — Admin</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap');
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+:root {
+  --bg: #060610;
+  --panel: #0a0b14;
+  --card: rgba(255,255,255,0.03);
+  --bdr: rgba(255,255,255,0.06);
+  --txt: #c8cad4;
+  --dim: #484b5e;
+  --bright: #eeeef2;
+  --green: #34d399;
+  --amber: #fbbf24;
+  --rose: #fb7185;
+  --purple: #a78bfa;
+  --blue: #60a5fa;
+  --cyan: #22d3ee;
+}
+
+body {
+  background: var(--bg);
+  color: var(--txt);
+  font-family: 'DM Sans', sans-serif;
+  padding: 32px;
+  min-height: 100vh;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+header .tag {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 3px; text-transform: uppercase;
+  color: var(--green);
+}
+header h1 {
+  font-size: 22px; font-weight: 400;
+  color: var(--bright); letter-spacing: -0.3px;
+}
+#conn-status {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 8px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px; color: var(--dim);
+}
+#conn-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--dim); transition: all .3s;
+}
+#conn-dot.on { background: var(--green); box-shadow: 0 0 8px rgba(52,211,153,0.5); }
+#conn-dot.err { background: var(--rose); box-shadow: 0 0 8px rgba(251,113,133,0.5); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--bdr);
+  border-radius: 10px;
+  padding: 20px;
+}
+.card-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px; font-weight: 400;
+  letter-spacing: 2px; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 12px;
+}
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+}
+.metric-row:last-child { border-bottom: none; }
+.metric-key {
+  font-size: 12px; color: var(--dim);
+}
+.metric-val {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px; font-weight: 500;
+  color: var(--bright);
+  transition: color .3s;
+}
+.metric-val.warn { color: var(--amber); }
+.metric-val.bad { color: var(--rose); }
+.metric-val.good { color: var(--green); }
+
+/* Big number hero metrics */
+.hero {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.hero-num {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 36px; font-weight: 500;
+  color: var(--bright);
+  letter-spacing: -1px;
+  transition: color .3s;
+}
+.hero-unit {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px; color: var(--dim);
+  letter-spacing: 0.5px;
+}
+.hero-sub {
+  font-size: 11px; color: var(--dim);
+}
+
+/* Timeline chart */
+.chart-wrap {
+  height: 80px;
+  position: relative;
+  margin-top: 12px;
+}
+canvas {
+  width: 100%; height: 100%;
+  display: block;
+}
+
+/* Last text */
+.last-text {
+  font-size: 12px; color: var(--txt);
+  line-height: 1.6;
+  max-height: 60px; overflow: hidden;
+  opacity: 0.7;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="tag">Admin</div>
+  <h1>Live Mind Map Monitor</h1>
+  <div id="conn-status">
+    <div id="conn-dot"></div>
+    <span id="conn-label">Connecting...</span>
+  </div>
+</header>
+
+<div class="grid">
+  <!-- STT Performance -->
+  <div class="card">
+    <div class="card-label">STT Performance</div>
+    <div class="hero">
+      <div class="hero-num" id="stt-duration">--</div>
+      <div class="hero-unit">sec / chunk</div>
+    </div>
+    <div class="hero-sub">Real-time factor: <span id="rt-factor">--</span>x (target &lt; 1.0x)</div>
+    <div class="chart-wrap"><canvas id="chart-stt"></canvas></div>
+  </div>
+
+  <!-- Audio Buffer -->
+  <div class="card">
+    <div class="card-label">Audio Buffer</div>
+    <div class="hero">
+      <div class="hero-num" id="buf-seconds">--</div>
+      <div class="hero-unit">sec buffered</div>
+    </div>
+    <div class="hero-sub">Lag behind real-time</div>
+    <div class="chart-wrap"><canvas id="chart-buf"></canvas></div>
+  </div>
+
+  <!-- Pipeline Stats -->
+  <div class="card">
+    <div class="card-label">Pipeline Stats</div>
+    <div class="metric-row">
+      <span class="metric-key">Chunks processed</span>
+      <span class="metric-val" id="m-processed">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Skipped (silent)</span>
+      <span class="metric-val" id="m-silent">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Skipped (catch-up)</span>
+      <span class="metric-val" id="m-catchup">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Empty STT results</span>
+      <span class="metric-val" id="m-empty">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Tokenizer recreations</span>
+      <span class="metric-val" id="m-recreations">0</span>
+    </div>
+  </div>
+
+  <!-- System -->
+  <div class="card">
+    <div class="card-label">System</div>
+    <div class="metric-row">
+      <span class="metric-key">Uptime</span>
+      <span class="metric-val" id="m-uptime">--</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">WebSocket clients</span>
+      <span class="metric-val" id="m-clients">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Audio RMS (live)</span>
+      <span class="metric-val" id="m-rms">--</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Transcript queue</span>
+      <span class="metric-val" id="m-queue">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">STT avg duration</span>
+      <span class="metric-val" id="m-avg">--</span>
+    </div>
+  </div>
+</div>
+
+<!-- Last transcription -->
+<div class="card" style="margin-bottom:24px;">
+  <div class="card-label">Last STT Output</div>
+  <div class="last-text" id="last-text">Waiting for data...</div>
+</div>
+
+<script>
+const WS_URL = 'ws://localhost:8765';
+const POLL_MS = 1000;
+const HISTORY = 60; // data points in charts
+
+// Chart data
+const sttHistory = [];
+const bufHistory = [];
+
+let ws = null;
+let pollTimer = null;
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  const dot = document.getElementById('conn-dot');
+  const label = document.getElementById('conn-label');
+
+  ws.onopen = () => {
+    dot.className = 'on';
+    label.textContent = 'Connected';
+    pollTimer = setInterval(() => {
+      if (ws.readyState === 1) ws.send(JSON.stringify({type: 'get_metrics'}));
+    }, POLL_MS);
+  };
+
+  ws.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'metrics') update(d);
+  };
+
+  ws.onclose = () => {
+    dot.className = 'err';
+    label.textContent = 'Disconnected — retrying...';
+    clearInterval(pollTimer);
+    setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+function update(m) {
+  // STT duration hero
+  const dur = m.stt_last_duration || 0;
+  const rtf = dur / 3; // 3s chunks
+  document.getElementById('stt-duration').textContent = dur.toFixed(2);
+  const sttEl = document.getElementById('stt-duration');
+  sttEl.className = 'hero-num' + (rtf > 1.2 ? ' bad' : rtf > 0.9 ? ' warn' : ' good');
+
+  document.getElementById('rt-factor').textContent = rtf.toFixed(2);
+  const rtfEl = document.getElementById('rt-factor');
+  rtfEl.style.color = rtf > 1.2 ? 'var(--rose)' : rtf > 0.9 ? 'var(--amber)' : 'var(--green)';
+
+  // Buffer hero
+  const buf = m.audio_buffer_seconds || 0;
+  document.getElementById('buf-seconds').textContent = buf.toFixed(1);
+  const bufEl = document.getElementById('buf-seconds');
+  bufEl.className = 'hero-num' + (buf > 9 ? ' bad' : buf > 5 ? ' warn' : ' good');
+
+  // Pipeline stats
+  document.getElementById('m-processed').textContent = m.chunks_processed || 0;
+  document.getElementById('m-silent').textContent = m.chunks_skipped_silent || 0;
+  const catchupEl = document.getElementById('m-catchup');
+  catchupEl.textContent = m.chunks_skipped_catchup || 0;
+  catchupEl.className = 'metric-val' + ((m.chunks_skipped_catchup || 0) > 0 ? ' warn' : '');
+  document.getElementById('m-empty').textContent = m.stt_empty_results || 0;
+  document.getElementById('m-recreations').textContent = m.tokenizer_recreations || 0;
+
+  // System
+  const up = m.uptime || 0;
+  const mins = Math.floor(up / 60);
+  const secs = Math.floor(up % 60);
+  document.getElementById('m-uptime').textContent = `${mins}m ${secs}s`;
+  document.getElementById('m-clients').textContent = m.ws_clients || 0;
+  const rms = m.audio_rms || 0;
+  const rmsEl = document.getElementById('m-rms');
+  rmsEl.textContent = rms.toFixed(4);
+  rmsEl.className = 'metric-val' + (rms < 0.01 ? ' warn' : ' good');
+  document.getElementById('m-queue').textContent = m.transcript_queue_size || 0;
+  document.getElementById('m-avg').textContent = (m.stt_avg_duration || 0).toFixed(2) + 's';
+
+  // Last text
+  if (m.stt_last_text) {
+    document.getElementById('last-text').textContent = m.stt_last_text;
+  }
+
+  // Chart data
+  sttHistory.push(dur);
+  if (sttHistory.length > HISTORY) sttHistory.shift();
+  bufHistory.push(buf);
+  if (bufHistory.length > HISTORY) bufHistory.shift();
+
+  drawChart('chart-stt', sttHistory, 3, 'stt');
+  drawChart('chart-buf', bufHistory, 9, 'buf');
+}
+
+function drawChart(canvasId, data, threshold, type) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (data.length < 2) return;
+
+  const max = Math.max(threshold * 1.5, ...data) * 1.1;
+  const step = W / (HISTORY - 1);
+
+  // Threshold line
+  const thY = H - (threshold / max) * H;
+  ctx.strokeStyle = 'rgba(251,113,133,0.2)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(0, thY);
+  ctx.lineTo(W, thY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Threshold label
+  ctx.fillStyle = 'rgba(251,113,133,0.35)';
+  ctx.font = '9px IBM Plex Mono';
+  ctx.fillText(type === 'stt' ? `${threshold}s (1:1)` : `${threshold}s (skip)`, 4, thY - 4);
+
+  // Data line
+  ctx.beginPath();
+  const offset = HISTORY - data.length;
+  for (let i = 0; i < data.length; i++) {
+    const x = (i + offset) * step;
+    const y = H - (data[i] / max) * H;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = type === 'stt' ? 'rgba(167,139,250,0.7)' : 'rgba(96,165,250,0.7)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Fill under
+  ctx.lineTo((data.length - 1 + offset) * step, H);
+  ctx.lineTo(offset * step, H);
+  ctx.closePath();
+  ctx.fillStyle = type === 'stt' ? 'rgba(167,139,250,0.06)' : 'rgba(96,165,250,0.06)';
+  ctx.fill();
+}
+
+connect();
+</script>
+</body>
+</html>

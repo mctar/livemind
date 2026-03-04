@@ -38,11 +38,29 @@ Two loosely coupled components:
 
 ## Key Configuration (in `live-mindmap.html`)
 
-Located at the top of the `<script>` block:
-- `ANALYSIS_INTERVAL`: how often Claude is called (default 20s)
-- `MIN_TRANSCRIPT_LENGTH`: minimum chars before triggering analysis (default 50)
-- `MAX_NODES`: cap enforced in the Claude prompt (default 30)
-- `MODEL`: Claude model string
+Located in the `C` object at the top of the `<script>` block:
+- `C.interval`: how often Claude is called in ms (default 20000)
+- `C.minLen`: minimum new chars before triggering analysis (default 50)
+- `C.maxN`: max node cap enforced in Claude prompt (default 30)
+- `C.model`: Claude model string
+- `C.colors`: 10-element palette array; index maps to `G.cmap` by group name
+
+## Frontend Internals
+
+The global `G` object holds all mutable state. Key fields:
+- `G.txt`: full accumulated transcript string
+- `G.sent`: character offset — only `G.txt.slice(G.sent)` is sent as "new segment" each Claude call; advances after a successful response
+- `G.nodes` / `G.edges`: current graph state fed into D3 simulation
+- `G.cmap` / `G.ci`: group→color assignment, persists across graph updates
+
+STT fallback: if the STT server URL is left blank (or the WebSocket fails), `fallbackMic()` activates the browser's Web Speech API (`webkitSpeechRecognition`). Works in Chrome without `stt_server.py`.
+
+WebSocket message protocol (server → browser):
+- `{"type":"transcript","text":"...","timestamp":1234567890}` — new transcribed text
+- `{"type":"status","status":"connected","message":"..."}` — connection status
+- `{"type":"pong"}` — keepalive response
+
+Claude is sent the full transcript plus the current graph; it returns `{"nodes":[...],"edges":[...]}`. `applyGraph()` diffs against the existing node set using node IDs to preserve D3 positions.
 
 ## Troubleshooting Audio
 

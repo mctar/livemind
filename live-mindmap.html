@@ -345,10 +345,6 @@ body {
     <div class="tag">Live Mind Map</div>
     <h1>AI in the Room</h1>
     <div class="inp-group">
-      <label>Claude API Key</label>
-      <input type="password" id="f-key" placeholder="sk-ant-..." autocomplete="off">
-    </div>
-    <div class="inp-group">
       <label>Meeting Topic</label>
       <input type="text" id="f-topic" placeholder="e.g. Q1 Strategy Kickoff (optional)">
     </div>
@@ -356,6 +352,14 @@ body {
       <label>STT Server</label>
       <input type="text" id="f-ws" value="ws://localhost:8765">
       <div class="sub">Run stt_server.py first. Clear this field to use browser mic.</div>
+    </div>
+    <div id="restore-banner" style="display:none; margin-bottom:16px; padding:12px 14px; background:rgba(52,211,153,0.06); border:1px solid rgba(52,211,153,0.2); border-radius:8px;">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase; color:var(--green); margin-bottom:6px;">Previous session found</div>
+      <div id="restore-info" style="font-size:12px; color:var(--txt); margin-bottom:10px;"></div>
+      <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dim); cursor:pointer;">
+        <input type="checkbox" id="restore-check" checked style="accent-color:var(--green);">
+        Restore transcript and map
+      </label>
     </div>
     <button id="start-btn">Connect</button>
   </div>
@@ -393,6 +397,7 @@ const C = {
   interval: 20000,
   minLen: 50,
   maxN: 30,
+  txWindow: 3000,
   model: 'claude-sonnet-4-20250514',
   colors: [
     '#34d399','#a78bfa','#fb7185','#fbbf24','#60a5fa',
@@ -402,9 +407,10 @@ const C = {
 
 // ─── State ───
 const G = {
-  key:'', topic:'', wsUrl:'', ws:null,
+  topic:'', wsUrl:'', ws:null,
   txt:'', sent:0, busy:false, paused:false,
   nodes:[], edges:[], cmap:{}, ci:0, fb:null,
+  _claudeId:0, _claudeCbs:{},
 };
 
 // ─── STT ───
@@ -426,6 +432,9 @@ function connectWS() {
     if (d.type === 'transcript' && d.text) {
       G.txt += d.text + ' ';
       pushChunk(d.text);
+    } else if (d.type === 'claude_response' && d.req_id && G._claudeCbs[d.req_id]) {
+      G._claudeCbs[d.req_id](d);
+      delete G._claudeCbs[d.req_id];
     }
   };
 }
@@ -462,6 +471,24 @@ function pushChunk(t) {
 }
 
 // ─── LLM ───
+function callClaude(body) {
+  return new Promise((resolve, reject) => {
+    if (!G.ws || G.ws.readyState !== 1) return reject(new Error('WebSocket not connected'));
+    const id = String(++G._claudeId);
+    const timeout = setTimeout(() => { delete G._claudeCbs[id]; reject(new Error('Claude request timeout')); }, 30000);
+    G._claudeCbs[id] = resp => {
+      clearTimeout(timeout);
+      if (resp.status !== 200) {
+        const msg = resp.status === 429 ? 'Rate limited' : `API error ${resp.status}`;
+        reject(new Error(msg));
+      } else {
+        resolve(resp.data);
+      }
+    };
+    G.ws.send(JSON.stringify({type:'claude_request', req_id:id, body}));
+  });
+}
+
 async function analyze() {
   if (G.busy || G.paused) return;
   const fresh = G.txt.slice(G.sent).trim();
@@ -495,32 +522,26 @@ ${G.topic ? `- Meeting context: "${G.topic}"` : ''}
 
 Return: {"nodes":[...],"edges":[...]}`;
 
-  const usr = `CURRENT GRAPH:\n${JSON.stringify(curGraph)}\n\nNEW SEGMENT:\n"${fresh}"\n\nFULL TRANSCRIPT:\n"${G.txt}"\n\nReturn the updated graph.`;
+  const ctxTxt = G.txt.length > C.txWindow ? '\u2026' + G.txt.slice(-C.txWindow) : G.txt;
+  const usr = `CURRENT GRAPH:\n${JSON.stringify(curGraph)}\n\nNEW SEGMENT:\n"${fresh}"\n\nRECENT TRANSCRIPT:\n"${ctxTxt}"\n\nReturn the updated graph.`;
 
   try {
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type':'application/json',
-        'x-api-key': G.key,
-        'anthropic-version':'2023-06-01',
-        'anthropic-dangerous-direct-browser-access':'true'
-      },
-      body: JSON.stringify({
-        model: C.model, max_tokens: 2000,
-        system: sys,
-        messages: [{role:'user', content:usr}]
-      })
+    const d = await callClaude({
+      model: C.model, max_tokens: 2000,
+      system: sys,
+      messages: [{role:'user', content:usr}]
     });
-    if (!r.ok) { console.error('API', r.status); G.busy=false; status('on','Listening'); return; }
-    const d = await r.json();
     const raw = d.content.map(c => c.text||'').join('');
     const g = JSON.parse(raw.replace(/```json\s*/g,'').replace(/```\s*/g,'').trim());
     if (g.nodes && g.edges) { applyGraph(g); G.sent = G.txt.length; }
-  } catch(e) { console.error('LLM:', e); }
+  } catch(e) {
+    console.error('LLM:', e);
+    status('', 'Analysis failed \u2014 retrying');
+    setTimeout(() => { if (!G.paused) status('on', listeningLabel()); }, 5000);
+  }
 
   G.busy = false;
-  if (!G.paused) status('on', G.ws && G.ws.readyState===1 ? 'Listening via local STT' : 'Listening');
+  if (!G.paused) status('on', listeningLabel());
 }
 
 // ─── Graph data ───
@@ -720,6 +741,11 @@ function tick() {
     .attr('transform', d => `translate(${d.x},${d.y})`);
 }
 
+// ─── Helpers ───
+function listeningLabel() {
+  return G.ws && G.ws.readyState === 1 ? 'Listening via local STT' : 'Listening';
+}
+
 // ─── Status ───
 function status(mode, text) {
   const led = document.getElementById('led');
@@ -742,16 +768,65 @@ setInterval(() => {
   }
 }, 5000);
 
+// ─── Session persistence ───
+const SAVE_KEY = 'livemind_session';
+
+function saveSession() {
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      v: 1, ts: Date.now(), topic: G.topic,
+      txt: G.txt, sent: G.sent, cmap: G.cmap, ci: G.ci,
+      nodes: G.nodes.map(n => ({id:n.id, label:n.label, group:n.group})),
+      edges: G.edges.map(e => ({
+        source: typeof e.source === 'object' ? e.source.id : e.source,
+        target: typeof e.target === 'object' ? e.target.id : e.target,
+        label: e.label,
+      })),
+    }));
+  } catch(e) { console.warn('Session save failed:', e); }
+}
+
+function checkRestore() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (!data.v || Date.now() - data.ts > 4 * 3600 * 1000) return;
+    const age = Math.round((Date.now() - data.ts) / 60000);
+    const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
+    document.getElementById('restore-info').textContent =
+      `${data.topic || 'untitled'} \u00b7 ${ageStr} \u00b7 ${(data.nodes||[]).length} concepts`;
+    document.getElementById('restore-banner').style.display = '';
+  } catch(e) {}
+}
+
+function restoreSession(data) {
+  G.txt  = data.txt  || '';
+  G.sent = data.sent || 0;
+  G.cmap = data.cmap || {};
+  G.ci   = data.ci   || 0;
+  G.nodes = (data.nodes || []).map(n => ({
+    ...n,
+    x: W / 2 + (Math.random() - .5) * 300,
+    y: H / 2 + (Math.random() - .5) * 300,
+    vx: 0, vy: 0, isNew: false,
+    color: G.cmap[n.group] || C.colors[0],
+  }));
+  G.edges = (data.edges || []);
+  if (G.txt) {
+    const box = document.getElementById('transcript-box');
+    const s = document.createElement('span');
+    s.className = 't-chunk faded';
+    s.textContent = G.txt;
+    box.appendChild(s);
+  }
+  G.nodes.forEach(n => logConcept(n.label, n.color));
+  document.getElementById('counter').textContent = G.nodes.length + ' concepts';
+  render();
+}
+
 // ─── Init ───
 document.getElementById('start-btn').addEventListener('click', () => {
-  // Strip non-ASCII characters (zero-width spaces, smart quotes, etc.)
-  const k = document.getElementById('f-key').value.replace(/[^\x20-\x7E]/g, '').trim();
-  if (!k.startsWith('sk-ant-')) {
-    document.getElementById('f-key').style.borderColor = 'var(--rose)';
-    document.getElementById('f-key').placeholder = 'must start with sk-ant-';
-    return;
-  }
-  G.key = k;
   G.topic = document.getElementById('f-topic').value.trim();
   G.wsUrl = document.getElementById('f-ws').value.trim();
 
@@ -759,15 +834,25 @@ document.getElementById('start-btn').addEventListener('click', () => {
   document.getElementById('app').classList.add('on');
 
   initViz();
+
+  // Restore previous session if checkbox is checked
+  const savedRaw = localStorage.getItem(SAVE_KEY);
+  if (savedRaw && document.getElementById('restore-check').checked) {
+    try { restoreSession(JSON.parse(savedRaw)); } catch(e) {}
+  }
+
   connectWS();
   setInterval(analyze, C.interval);
+  setInterval(saveSession, 60000);
 });
 
-['f-key','f-topic','f-ws'].forEach(id =>
+['f-topic','f-ws'].forEach(id =>
   document.getElementById(id).addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('start-btn').click();
   })
 );
+
+checkRestore();
 
 document.getElementById('c-pause').addEventListener('click', () => {
   G.paused = !G.paused;
@@ -779,12 +864,14 @@ document.getElementById('c-pause').addEventListener('click', () => {
 
 document.getElementById('c-reset').addEventListener('click', () => {
   if (!confirm('Reset the mind map?')) return;
-  G.nodes=[]; G.edges=[]; G.sent=0; G.ci=0; G.cmap={};
+  G.nodes=[]; G.edges=[]; G.txt=''; G.sent=0; G.ci=0; G.cmap={};
   gEdge.selectAll('*').remove();
   gNode.selectAll('*').remove();
+  document.getElementById('transcript-box').innerHTML = '';
   document.querySelectorAll('#concepts .con-item').forEach(e=>e.remove());
   document.getElementById('counter').textContent = '0 concepts';
   sim.nodes([]); sim.force('link').links([]);
+  localStorage.removeItem(SAVE_KEY);
 });
 </script>
 </body>
