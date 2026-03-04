@@ -200,12 +200,45 @@ async def session_action(session_id: str, request: Request):
     return JSONResponse({"ok": True, "graph": graph})
 
 
+@app.post("/v1/sessions/new")
+async def new_session(request: Request):
+    """End current session (if any) and start a fresh one. Returns the new session."""
+    global _current_session_id, _summary, _seq_counter
+    body = await request.json() if request.headers.get("content-length", "0") != "0" else {}
+    topic = body.get("topic", "")
+    # End current session
+    if _current_session_id:
+        if reconciler.nodes:
+            await db.store_snapshot(_current_session_id, _seq_counter, reconciler.get_full_state(), "end")
+        await db.end_session(_current_session_id, _summary)
+    # Reset state
+    reconciler.nodes.clear()
+    reconciler.edges.clear()
+    reconciler._mention_log.clear()
+    reconciler._churn_log.clear()
+    _summary = ""
+    # Create new
+    session_id = str(uuid.uuid4())[:8]
+    session = await db.create_session(session_id, topic)
+    _current_session_id = session_id
+    # Notify all connected frontends
+    msg = json.dumps({"type": "session_reset", "session_id": session_id})
+    for ws in list(connected_clients):
+        try:
+            await ws.send_text(msg)
+        except Exception:
+            pass
+    return JSONResponse(session)
+
+
 @app.get("/v1/metrics")
 async def get_metrics_rest():
     with metrics_lock:
         m = {**metrics, "uptime": time.time() - metrics["started_at"]}
     churn = reconciler.get_churn_metrics()
     m.update(churn)
+    m["current_session_id"] = _current_session_id
+    m["active_nodes"] = len([ns for ns in reconciler.nodes.values() if ns.state == "active"])
     return JSONResponse(m)
 
 
@@ -368,6 +401,8 @@ async def ws_endpoint(websocket: WebSocket):
                     m = {**metrics, "uptime": time.time() - metrics["started_at"]}
                 churn = reconciler.get_churn_metrics()
                 m.update(churn)
+                m["current_session_id"] = _current_session_id
+                m["active_nodes"] = len([ns for ns in reconciler.nodes.values() if ns.state == "active"])
                 await websocket.send_json({"type": "metrics", **m})
 
             elif msg_type == "claude_request":

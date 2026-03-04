@@ -143,6 +143,71 @@ canvas {
   max-height: 60px; overflow: hidden;
   opacity: 0.7;
 }
+
+/* Session controls */
+.session-bar {
+  display: flex; align-items: center; gap: 16px;
+  margin-bottom: 24px;
+  padding: 18px 22px;
+  background: var(--panel);
+  border: 1px solid var(--bdr);
+  border-radius: 10px;
+}
+.session-info {
+  flex: 1;
+}
+.session-id {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px; font-weight: 500;
+  color: var(--bright);
+}
+.session-meta {
+  font-size: 11px; color: var(--dim);
+  margin-top: 2px;
+}
+.session-btn {
+  padding: 9px 18px;
+  background: transparent;
+  border: 1px solid var(--bdr);
+  border-radius: 6px;
+  color: var(--dim);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 1px; text-transform: uppercase;
+  cursor: pointer;
+  transition: all .2s;
+}
+.session-btn:hover {
+  border-color: rgba(255,255,255,0.15);
+  color: var(--txt);
+}
+.session-btn.primary {
+  border-color: var(--green);
+  color: var(--green);
+}
+.session-btn.primary:hover {
+  background: rgba(52,211,153,0.08);
+}
+.session-btn.danger {
+  border-color: var(--rose);
+  color: var(--rose);
+}
+.session-btn.danger:hover {
+  background: rgba(251,113,133,0.08);
+}
+.session-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.session-toast {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--green);
+  opacity: 0;
+  transition: opacity .3s;
+}
+.session-toast.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -155,6 +220,16 @@ canvas {
     <span id="conn-label">Connecting...</span>
   </div>
 </header>
+
+<div class="session-bar">
+  <div class="session-info">
+    <div class="session-id" id="s-id">No active session</div>
+    <div class="session-meta" id="s-meta"></div>
+  </div>
+  <span class="session-toast" id="s-toast"></span>
+  <button class="session-btn primary" id="btn-new-session">New Session</button>
+  <button class="session-btn danger" id="btn-end-session">End Session</button>
+</div>
 
 <div class="grid">
   <!-- STT Performance -->
@@ -350,6 +425,18 @@ function connect() {
 }
 
 function update(m) {
+  // Session info
+  const sid = m.current_session_id || null;
+  if (sid) {
+    currentSessionId = sid;
+    document.getElementById('s-id').textContent = 'Session: ' + sid;
+    const nodes = m.active_nodes || 0;
+    document.getElementById('s-meta').textContent = nodes + ' active nodes';
+  } else {
+    document.getElementById('s-id').textContent = 'No active session';
+    document.getElementById('s-meta').textContent = '';
+  }
+
   const chunkSec = m.chunk_seconds || 2;
 
   // STT duration hero
@@ -512,6 +599,58 @@ function drawChart(canvasId, data, threshold, type) {
   ctx.fillStyle = fillColors[type] || fillColors.stt;
   ctx.fill();
 }
+
+// ─── Session controls ───
+const API_BASE = 'http://localhost:8765';
+let currentSessionId = null;
+
+function showToast(msg) {
+  const el = document.getElementById('s-toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+document.getElementById('btn-new-session').addEventListener('click', async () => {
+  if (!confirm('End the current session and start a fresh one?\nAll data from this session is archived.')) return;
+  const btn = document.getElementById('btn-new-session');
+  btn.disabled = true;
+  try {
+    const topic = prompt('Topic for new session (optional):', '') || '';
+    const resp = await fetch(API_BASE + '/v1/sessions/new', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({topic}),
+    });
+    const data = await resp.json();
+    currentSessionId = data.id;
+    showToast('New session started: ' + data.id);
+  } catch(e) {
+    showToast('Failed: ' + e.message);
+  }
+  btn.disabled = false;
+});
+
+document.getElementById('btn-end-session').addEventListener('click', async () => {
+  if (!currentSessionId) { showToast('No active session'); return; }
+  if (!confirm('End the current session and archive all data?\nThe mind map will go blank until a new session is created.')) return;
+  const btn = document.getElementById('btn-end-session');
+  btn.disabled = true;
+  try {
+    await fetch(API_BASE + '/v1/sessions/' + currentSessionId + '/end', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    showToast('Session ' + currentSessionId + ' archived');
+    currentSessionId = null;
+    document.getElementById('s-id').textContent = 'No active session';
+    document.getElementById('s-meta').textContent = '';
+  } catch(e) {
+    showToast('Failed: ' + e.message);
+  }
+  btn.disabled = false;
+});
 
 connect();
 </script>

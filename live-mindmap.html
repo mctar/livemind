@@ -648,6 +648,19 @@ function connectWS() {
       handleRestore(d);
     } else if (d.type === 'graph_update' && d.graph) {
       applyGraph(d.graph);
+    } else if (d.type === 'session_reset') {
+      // Server-initiated reset (e.g. from admin panel)
+      G.nodes=[]; G.edges=[]; G.txt=''; G.sent=0; G.ci=0; G.cmap={}; G.summary='';
+      G.sessionId = d.session_id; G.lastSeq=0; G.mergeSource=null;
+      G.busy=false; G.degraded=false;
+      if (gNode) gEdge.selectAll('*').remove();
+      if (gNode) gNode.selectAll('*').remove();
+      document.getElementById('transcript-box').innerHTML = '';
+      document.querySelectorAll('#concepts .con-item').forEach(e=>e.remove());
+      document.getElementById('counter').textContent = '0 concepts';
+      if (sim) { sim.nodes([]); sim.force('link').links([]); }
+      localStorage.removeItem(SAVE_KEY);
+      status('on', listeningLabel());
     }
   };
 }
