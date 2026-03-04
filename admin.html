@@ -179,6 +179,28 @@ canvas {
     <div class="chart-wrap"><canvas id="chart-buf"></canvas></div>
   </div>
 
+  <!-- Claude API -->
+  <div class="card">
+    <div class="card-label">Claude API</div>
+    <div class="hero">
+      <div class="hero-num" id="claude-duration">--</div>
+      <div class="hero-unit">sec / call</div>
+    </div>
+    <div class="hero-sub">Calls: <span id="claude-calls">0</span> &middot; Errors: <span id="claude-errors">0</span></div>
+    <div class="chart-wrap"><canvas id="chart-claude"></canvas></div>
+  </div>
+
+  <!-- E2E Latency -->
+  <div class="card">
+    <div class="card-label">End-to-End Latency</div>
+    <div class="hero">
+      <div class="hero-num" id="e2e-duration">--</div>
+      <div class="hero-unit">sec (chunk grab → send)</div>
+    </div>
+    <div class="hero-sub">Avg: <span id="e2e-avg">--</span>s &middot; Tokenizer: <span id="tok-ms">--</span>ms</div>
+    <div class="chart-wrap"><canvas id="chart-e2e"></canvas></div>
+  </div>
+
   <!-- Pipeline Stats -->
   <div class="card">
     <div class="card-label">Pipeline Stats</div>
@@ -193,6 +215,10 @@ canvas {
     <div class="metric-row">
       <span class="metric-key">Skipped (catch-up)</span>
       <span class="metric-val" id="m-catchup">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Partials emitted</span>
+      <span class="metric-val" id="m-partials">0</span>
     </div>
     <div class="metric-row">
       <span class="metric-key">Empty STT results</span>
@@ -220,12 +246,57 @@ canvas {
       <span class="metric-val" id="m-rms">--</span>
     </div>
     <div class="metric-row">
+      <span class="metric-key">VAD state</span>
+      <span class="metric-val" id="m-vad">--</span>
+    </div>
+    <div class="metric-row">
       <span class="metric-key">Transcript queue</span>
       <span class="metric-val" id="m-queue">0</span>
     </div>
     <div class="metric-row">
       <span class="metric-key">STT avg duration</span>
       <span class="metric-val" id="m-avg">--</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Circuit breaker</span>
+      <span class="metric-val" id="m-cb-state">--</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">CB consecutive failures</span>
+      <span class="metric-val" id="m-cb-failures">0</span>
+    </div>
+  </div>
+
+  <!-- Graph Churn -->
+  <div class="card">
+    <div class="card-label">Graph Churn</div>
+    <div class="metric-row">
+      <span class="metric-key">Nodes added / min</span>
+      <span class="metric-val" id="m-nodes-added">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Nodes removed / min</span>
+      <span class="metric-val" id="m-nodes-removed">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Edge churn / min</span>
+      <span class="metric-val" id="m-edge-churn">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Analysis queue depth</span>
+      <span class="metric-val" id="m-analysis-queue">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">WS reconnects</span>
+      <span class="metric-val" id="m-reconnects">0</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Restore time</span>
+      <span class="metric-val" id="m-restore-ms">--</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-key">Frontend FPS</span>
+      <span class="metric-val" id="m-frontend-fps">--</span>
     </div>
   </div>
 </div>
@@ -237,13 +308,15 @@ canvas {
 </div>
 
 <script>
-const WS_URL = 'ws://localhost:8765';
+const WS_URL = 'ws://localhost:8765/ws';
 const POLL_MS = 1000;
 const HISTORY = 60; // data points in charts
 
 // Chart data
 const sttHistory = [];
 const bufHistory = [];
+const claudeHistory = [];
+const e2eHistory = [];
 
 let ws = null;
 let pollTimer = null;
@@ -277,9 +350,11 @@ function connect() {
 }
 
 function update(m) {
+  const chunkSec = m.chunk_seconds || 2;
+
   // STT duration hero
   const dur = m.stt_last_duration || 0;
-  const rtf = dur / 3; // 3s chunks
+  const rtf = dur / chunkSec;
   document.getElementById('stt-duration').textContent = dur.toFixed(2);
   const sttEl = document.getElementById('stt-duration');
   sttEl.className = 'hero-num' + (rtf > 1.2 ? ' bad' : rtf > 0.9 ? ' warn' : ' good');
@@ -292,7 +367,25 @@ function update(m) {
   const buf = m.audio_buffer_seconds || 0;
   document.getElementById('buf-seconds').textContent = buf.toFixed(1);
   const bufEl = document.getElementById('buf-seconds');
-  bufEl.className = 'hero-num' + (buf > 9 ? ' bad' : buf > 5 ? ' warn' : ' good');
+  bufEl.className = 'hero-num' + (buf > 6 ? ' bad' : buf > 3 ? ' warn' : ' good');
+
+  // Claude API
+  const cDur = m.claude_last_duration || 0;
+  document.getElementById('claude-duration').textContent = cDur.toFixed(2);
+  const cEl = document.getElementById('claude-duration');
+  cEl.className = 'hero-num' + (cDur > 8 ? ' bad' : cDur > 5 ? ' warn' : ' good');
+  document.getElementById('claude-calls').textContent = m.claude_calls || 0;
+  const cerrEl = document.getElementById('claude-errors');
+  cerrEl.textContent = m.claude_errors || 0;
+  cerrEl.style.color = (m.claude_errors || 0) > 0 ? 'var(--rose)' : 'var(--dim)';
+
+  // E2E latency
+  const e2e = m.stt_e2e_last || 0;
+  document.getElementById('e2e-duration').textContent = e2e.toFixed(2);
+  const e2eEl = document.getElementById('e2e-duration');
+  e2eEl.className = 'hero-num' + (e2e > chunkSec * 1.2 ? ' bad' : e2e > chunkSec ? ' warn' : ' good');
+  document.getElementById('e2e-avg').textContent = (m.stt_e2e_avg || 0).toFixed(2);
+  document.getElementById('tok-ms').textContent = (m.tokenizer_last_ms || 0).toFixed(0);
 
   // Pipeline stats
   document.getElementById('m-processed').textContent = m.chunks_processed || 0;
@@ -300,6 +393,7 @@ function update(m) {
   const catchupEl = document.getElementById('m-catchup');
   catchupEl.textContent = m.chunks_skipped_catchup || 0;
   catchupEl.className = 'metric-val' + ((m.chunks_skipped_catchup || 0) > 0 ? ' warn' : '');
+  document.getElementById('m-partials').textContent = m.stt_partials_emitted || 0;
   document.getElementById('m-empty').textContent = m.stt_empty_results || 0;
   document.getElementById('m-recreations').textContent = m.tokenizer_recreations || 0;
 
@@ -315,6 +409,32 @@ function update(m) {
   rmsEl.className = 'metric-val' + (rms < 0.01 ? ' warn' : ' good');
   document.getElementById('m-queue').textContent = m.transcript_queue_size || 0;
   document.getElementById('m-avg').textContent = (m.stt_avg_duration || 0).toFixed(2) + 's';
+  const cbState = m.cb_state || 'closed';
+  const cbEl = document.getElementById('m-cb-state');
+  cbEl.textContent = cbState;
+  cbEl.className = 'metric-val' + (cbState === 'closed' ? ' good' : cbState === 'open' ? ' warn' : '');
+  document.getElementById('m-cb-failures').textContent = m.cb_failures || 0;
+
+  // VAD state
+  const vadState = m.vad_state || 'unknown';
+  const vadEl = document.getElementById('m-vad');
+  vadEl.textContent = vadState;
+  vadEl.className = 'metric-val' + (vadState === 'speaking' ? ' good' : vadState === 'silent' ? ' warn' : '');
+
+  // Graph churn metrics
+  document.getElementById('m-nodes-added').textContent = m.nodes_added_per_min || 0;
+  document.getElementById('m-nodes-removed').textContent = m.nodes_removed_per_min || 0;
+  document.getElementById('m-edge-churn').textContent = m.edge_churn_per_min || 0;
+  document.getElementById('m-analysis-queue').textContent = m.analysis_queue_depth || 0;
+  document.getElementById('m-reconnects').textContent = m.ws_reconnects || 0;
+  const restoreMs = m.last_restore_ms || 0;
+  const restoreEl = document.getElementById('m-restore-ms');
+  restoreEl.textContent = restoreMs > 0 ? restoreMs.toFixed(0) + 'ms' : '--';
+  restoreEl.className = 'metric-val' + (restoreMs > 10000 ? ' bad' : restoreMs > 5000 ? ' warn' : restoreMs > 0 ? ' good' : '');
+  const feFps = m.frontend_fps || 0;
+  const fpsEl = document.getElementById('m-frontend-fps');
+  fpsEl.textContent = feFps > 0 ? feFps : '--';
+  fpsEl.className = 'metric-val' + (feFps > 0 && feFps < 30 ? ' bad' : feFps >= 30 && feFps < 50 ? ' warn' : feFps >= 50 ? ' good' : '');
 
   // Last text
   if (m.stt_last_text) {
@@ -326,9 +446,14 @@ function update(m) {
   if (sttHistory.length > HISTORY) sttHistory.shift();
   bufHistory.push(buf);
   if (bufHistory.length > HISTORY) bufHistory.shift();
+  if (cDur > 0) { claudeHistory.push(cDur); if (claudeHistory.length > HISTORY) claudeHistory.shift(); }
+  e2eHistory.push(e2e);
+  if (e2eHistory.length > HISTORY) e2eHistory.shift();
 
-  drawChart('chart-stt', sttHistory, 3, 'stt');
-  drawChart('chart-buf', bufHistory, 9, 'buf');
+  drawChart('chart-stt', sttHistory, chunkSec, 'stt');
+  drawChart('chart-buf', bufHistory, chunkSec * 3, 'buf');
+  drawChart('chart-claude', claudeHistory, 5, 'claude');
+  drawChart('chart-e2e', e2eHistory, chunkSec, 'e2e');
 }
 
 function drawChart(canvasId, data, threshold, type) {
@@ -362,7 +487,8 @@ function drawChart(canvasId, data, threshold, type) {
   // Threshold label
   ctx.fillStyle = 'rgba(251,113,133,0.35)';
   ctx.font = '9px IBM Plex Mono';
-  ctx.fillText(type === 'stt' ? `${threshold}s (1:1)` : `${threshold}s (skip)`, 4, thY - 4);
+  const thLabels = {stt: `${threshold}s (1:1)`, buf: `${threshold}s (skip)`, claude: `${threshold}s target`, e2e: `${threshold}s (chunk)`};
+  ctx.fillText(thLabels[type] || `${threshold}s`, 4, thY - 4);
 
   // Data line
   ctx.beginPath();
@@ -373,7 +499,9 @@ function drawChart(canvasId, data, threshold, type) {
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
-  ctx.strokeStyle = type === 'stt' ? 'rgba(167,139,250,0.7)' : 'rgba(96,165,250,0.7)';
+  const lineColors = {stt: 'rgba(167,139,250,0.7)', buf: 'rgba(96,165,250,0.7)', claude: 'rgba(52,211,153,0.7)', e2e: 'rgba(251,191,36,0.7)'};
+  const fillColors = {stt: 'rgba(167,139,250,0.06)', buf: 'rgba(96,165,250,0.06)', claude: 'rgba(52,211,153,0.06)', e2e: 'rgba(251,191,36,0.06)'};
+  ctx.strokeStyle = lineColors[type] || lineColors.stt;
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
@@ -381,7 +509,7 @@ function drawChart(canvasId, data, threshold, type) {
   ctx.lineTo((data.length - 1 + offset) * step, H);
   ctx.lineTo(offset * step, H);
   ctx.closePath();
-  ctx.fillStyle = type === 'stt' ? 'rgba(167,139,250,0.06)' : 'rgba(96,165,250,0.06)';
+  ctx.fillStyle = fillColors[type] || fillColors.stt;
   ctx.fill();
 }
 

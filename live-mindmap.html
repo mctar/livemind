@@ -148,6 +148,11 @@ body {
   box-shadow: 0 0 10px rgba(167,139,250,0.5);
   animation: pulse .8s ease infinite;
 }
+.led.warn {
+  background: var(--amber);
+  box-shadow: 0 0 10px rgba(251,191,36,0.5);
+  animation: pulse 1.5s ease infinite;
+}
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 
 #pill-text {
@@ -198,6 +203,12 @@ body {
   animation: fadein .5s ease;
 }
 .t-chunk.faded { color: var(--dim); }
+.t-partial {
+  color: var(--dim);
+  display: inline;
+  font-style: italic;
+  opacity: 0.6;
+}
 @keyframes fadein {
   from { opacity:0; transform: translateY(4px); }
   to { opacity:1; transform: translateY(0); }
@@ -245,6 +256,38 @@ body {
 }
 .ctrl:hover { border-color: rgba(255,255,255,0.12); color: var(--txt); }
 .ctrl.active { border-color: var(--green); color: var(--green); }
+
+/* ========== CONTEXT MENU ========== */
+#ctx-menu {
+  position: fixed; display: none; z-index: 100;
+  background: rgba(10,11,20,0.95);
+  border: 1px solid var(--bdr);
+  border-radius: 8px;
+  padding: 4px;
+  backdrop-filter: blur(20px);
+  min-width: 140px;
+}
+#ctx-menu button {
+  display: block; width: 100%;
+  padding: 8px 14px;
+  background: none; border: none;
+  color: var(--txt);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px; font-weight: 400;
+  text-align: left; cursor: pointer;
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+}
+#ctx-menu button:hover { background: rgba(255,255,255,0.06); color: var(--bright); }
+#ctx-menu button.danger:hover { color: var(--rose); }
+.n-group.merge-source .n-outer {
+  stroke-dasharray: 4 2;
+  stroke-width: 2;
+}
+.n-group.pinned .n-outer {
+  stroke-width: 2;
+  opacity: 0.6;
+}
 
 /* ========== D3 NODE STYLES ========== */
 
@@ -350,8 +393,8 @@ body {
     </div>
     <div class="inp-group">
       <label>STT Server</label>
-      <input type="text" id="f-ws" value="ws://localhost:8765">
-      <div class="sub">Run stt_server.py first. Clear this field to use browser mic.</div>
+      <input type="text" id="f-ws" value="ws://localhost:8765/ws">
+      <div class="sub">Run app.py first. Clear this field to use browser mic.</div>
     </div>
     <div id="restore-banner" style="display:none; margin-bottom:16px; padding:12px 14px; background:rgba(52,211,153,0.06); border:1px solid rgba(52,211,153,0.2); border-radius:8px;">
       <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase; color:var(--green); margin-bottom:6px;">Previous session found</div>
@@ -377,6 +420,13 @@ body {
     </div>
     <div id="counter">0 concepts</div>
     <svg id="viz"></svg>
+    <div id="ctx-menu">
+      <button data-action="pin">Pin / Unpin</button>
+      <button data-action="promote">Promote</button>
+      <button data-action="rename">Rename</button>
+      <button data-action="merge">Merge into...</button>
+      <button data-action="hide" class="danger">Hide</button>
+    </div>
   </div>
   <div id="sidebar">
     <div class="side-head"><h3>Transcript</h3></div>
@@ -386,6 +436,7 @@ body {
     </div>
     <div id="ctrl-bar">
       <button class="ctrl" id="c-pause">Pause</button>
+      <button class="ctrl" id="c-new">New Session</button>
       <button class="ctrl" id="c-reset">Reset</button>
     </div>
   </div>
@@ -397,7 +448,6 @@ const C = {
   interval: 20000,
   minLen: 50,
   maxN: 30,
-  txWindow: 3000,
   model: 'claude-sonnet-4-20250514',
   colors: [
     '#34d399','#a78bfa','#fb7185','#fbbf24','#60a5fa',
@@ -411,13 +461,95 @@ const G = {
   txt:'', sent:0, busy:false, paused:false,
   nodes:[], edges:[], cmap:{}, ci:0, fb:null,
   _claudeId:0, _claudeCbs:{},
+  degraded:false, degradedReason:'', degradedRecoveryTimer:null,
+  summary:'',
+  // New: session + reconnect
+  sessionId: null, lastSeq: 0,
+  // New: merge mode
+  mergeSource: null,
+  // New: context menu target
+  _ctxNode: null,
 };
+
+// ─── Session API ───
+async function createSession() {
+  try {
+    const base = G.wsUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '');
+    const resp = await fetch(base + '/v1/sessions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({topic: G.topic}),
+    });
+    const data = await resp.json();
+    G.sessionId = data.id;
+  } catch(e) {
+    console.warn('Session create failed:', e);
+  }
+}
+
+async function endCurrentSession() {
+  if (!G.sessionId || !G.wsUrl) return;
+  try {
+    const base = G.wsUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '');
+    await fetch(base + '/v1/sessions/' + G.sessionId + '/end', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({summary: G.summary}),
+    });
+  } catch(e) { console.warn('End session failed:', e); }
+}
+
+async function startFreshSession() {
+  // End current session on server (stores final snapshot + all data)
+  await endCurrentSession();
+  // Clear local state
+  G.nodes=[]; G.edges=[]; G.txt=''; G.sent=0; G.ci=0; G.cmap={}; G.summary='';
+  G.sessionId=null; G.lastSeq=0; G.mergeSource=null;
+  G.busy=false; G.degraded=false;
+  if (G.degradedRecoveryTimer) { clearTimeout(G.degradedRecoveryTimer); G.degradedRecoveryTimer=null; }
+  gEdge.selectAll('*').remove();
+  gNode.selectAll('*').remove();
+  document.getElementById('transcript-box').innerHTML = '';
+  document.querySelectorAll('#concepts .con-item').forEach(e=>e.remove());
+  document.getElementById('counter').textContent = '0 concepts';
+  sim.nodes([]); sim.force('link').links([]);
+  localStorage.removeItem(SAVE_KEY);
+  // Create new server session
+  await createSession();
+  status('on', listeningLabel());
+}
+
+async function execAction(actionType, payload) {
+  if (!G.sessionId) return;
+  try {
+    const base = G.wsUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '');
+    const resp = await fetch(base + '/v1/sessions/' + G.sessionId + '/actions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: actionType, payload}),
+    });
+    const data = await resp.json();
+    if (data.graph) applyGraph(data.graph);
+  } catch(e) {
+    console.warn('Action failed:', e);
+  }
+}
 
 // ─── STT ───
 function connectWS() {
   if (!G.wsUrl) { fallbackMic(); return; }
   G.ws = new WebSocket(G.wsUrl);
-  G.ws.onopen = () => status('on','Listening via local STT');
+  G.ws.onopen = () => {
+    status('on','Listening via local STT');
+    // Send connect_session for reconnect support
+    if (G.sessionId) {
+      G.ws.send(JSON.stringify({
+        type: 'connect_session',
+        session_id: G.sessionId,
+        last_seq: G.lastSeq,
+      }));
+    }
+  };
   G.ws.onclose = () => {
     status('','STT disconnected');
     setTimeout(() => { if (!G.paused) connectWS(); }, 3000);
@@ -429,14 +561,51 @@ function connectWS() {
   };
   G.ws.onmessage = e => {
     const d = JSON.parse(e.data);
-    if (d.type === 'transcript' && d.text) {
-      G.txt += d.text + ' ';
-      pushChunk(d.text);
+    if (d.type === 'partial_transcript' && d.text) {
+      if (d.seq) G.lastSeq = d.seq;
+      showPartial(d.text);
+    } else if (d.type === 'transcript' && d.text) {
+      if (d.seq) G.lastSeq = d.seq;
+      finalizePartial(d.text);
     } else if (d.type === 'claude_response' && d.req_id && G._claudeCbs[d.req_id]) {
       G._claudeCbs[d.req_id](d);
       delete G._claudeCbs[d.req_id];
+    } else if (d.type === 'restore') {
+      handleRestore(d);
+    } else if (d.type === 'graph_update' && d.graph) {
+      applyGraph(d.graph);
     }
   };
+}
+
+function handleRestore(data) {
+  // Apply snapshot graph if present
+  if (data.snapshot && data.snapshot.graph) {
+    const g = data.snapshot.graph;
+    // Snapshot has full reconciler state; extract active graph
+    const activeNodes = [];
+    if (g.nodes) {
+      for (const [nid, ns] of Object.entries(g.nodes)) {
+        if (ns.state === 'active') {
+          activeNodes.push({id: ns.id, label: ns.label, group: ns.group});
+        }
+      }
+    }
+    if (activeNodes.length > 0) {
+      applyGraph({nodes: activeNodes, edges: g.edges || []});
+    }
+    G.lastSeq = data.snapshot.seq_at || 0;
+  }
+  // Replay segments since snapshot
+  if (data.segments) {
+    for (const seg of data.segments) {
+      if (!seg.is_partial && seg.text) {
+        G.txt += seg.text + ' ';
+        pushChunk(seg.text);
+      }
+      if (seg.seq > G.lastSeq) G.lastSeq = seg.seq;
+    }
+  }
 }
 
 function fallbackMic() {
@@ -470,17 +639,42 @@ function pushChunk(t) {
   box.scrollTop = box.scrollHeight;
 }
 
+function showPartial(text) {
+  const box = document.getElementById('transcript-box');
+  let el = box.querySelector('.t-partial');
+  if (!el) {
+    box.querySelectorAll('.t-chunk:not(.faded)').forEach(c => c.classList.add('faded'));
+    el = document.createElement('span');
+    el.className = 't-partial';
+    box.appendChild(el);
+  }
+  el.textContent = text + ' ';
+  box.scrollTop = box.scrollHeight;
+}
+
+function finalizePartial(text) {
+  const box = document.getElementById('transcript-box');
+  const partial = box.querySelector('.t-partial');
+  if (partial) partial.remove();
+  G.txt += text + ' ';
+  pushChunk(text);
+}
+
 // ─── LLM ───
 function callClaude(body) {
   return new Promise((resolve, reject) => {
-    if (!G.ws || G.ws.readyState !== 1) return reject(new Error('WebSocket not connected'));
+    if (!G.ws || G.ws.readyState !== 1) {
+      const err = new Error('WebSocket not connected'); err.statusCode = 0;
+      return reject(err);
+    }
     const id = String(++G._claudeId);
-    const timeout = setTimeout(() => { delete G._claudeCbs[id]; reject(new Error('Claude request timeout')); }, 30000);
+    const timeout = setTimeout(() => { delete G._claudeCbs[id]; const err = new Error('Claude request timeout'); err.statusCode = 0; reject(err); }, 30000);
     G._claudeCbs[id] = resp => {
       clearTimeout(timeout);
       if (resp.status !== 200) {
-        const msg = resp.status === 429 ? 'Rate limited' : `API error ${resp.status}`;
-        reject(new Error(msg));
+        const msg = resp.status === 429 ? 'Rate limited' : resp.status === 503 ? 'Circuit breaker open' : `API error ${resp.status}`;
+        const err = new Error(msg); err.statusCode = resp.status; err.retryAfter = resp.data?.retry_after;
+        reject(err);
       } else {
         resolve(resp.data);
       }
@@ -491,6 +685,7 @@ function callClaude(body) {
 
 async function analyze() {
   if (G.busy || G.paused) return;
+  if (G.degraded) return;
   const fresh = G.txt.slice(G.sent).trim();
   if (fresh.length < C.minLen) return;
 
@@ -520,27 +715,74 @@ Rules:
 - Create edges that reveal the STRUCTURE of the discussion, not just proximity.
 ${G.topic ? `- Meeting context: "${G.topic}"` : ''}
 
-Return: {"nodes":[...],"edges":[...]}`;
+Return: {"nodes":[...],"edges":[...],"summary":"<2-3 sentence summary of all key points discussed so far>"}`;
 
-  const ctxTxt = G.txt.length > C.txWindow ? '\u2026' + G.txt.slice(-C.txWindow) : G.txt;
-  const usr = `CURRENT GRAPH:\n${JSON.stringify(curGraph)}\n\nNEW SEGMENT:\n"${fresh}"\n\nRECENT TRANSCRIPT:\n"${ctxTxt}"\n\nReturn the updated graph.`;
+  const contextBlock = G.summary
+    ? `CONTEXT SUMMARY:\n"${G.summary}"`
+    : (G.txt.length > 0 ? `INITIAL TRANSCRIPT:\n"${G.txt.slice(0, 3000)}"` : '');
+  const usr = `CURRENT GRAPH:\n${JSON.stringify(curGraph)}\n\nNEW SEGMENT:\n"${fresh}"\n\n${contextBlock}\n\nReturn the updated graph.`;
 
-  try {
-    const d = await callClaude({
-      model: C.model, max_tokens: 2000,
-      system: sys,
-      messages: [{role:'user', content:usr}]
-    });
-    const raw = d.content.map(c => c.text||'').join('');
-    const g = JSON.parse(raw.replace(/```json\s*/g,'').replace(/```\s*/g,'').trim());
-    if (g.nodes && g.edges) { applyGraph(g); G.sent = G.txt.length; }
-  } catch(e) {
-    console.error('LLM:', e);
-    status('', 'Analysis failed \u2014 retrying');
-    setTimeout(() => { if (!G.paused) status('on', listeningLabel()); }, 5000);
+  const body = { model: C.model, max_tokens: 2000, system: sys, messages: [{role:'user', content:usr}] };
+  const MAX_RETRIES = 2;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+        status('think', `Retrying analysis (${attempt}/${MAX_RETRIES})...`);
+      }
+      const d = await callClaude(body);
+      const raw = d.content.map(c => c.text||'').join('');
+      const g = JSON.parse(raw.replace(/```json\s*/g,'').replace(/```\s*/g,'').trim());
+      if (g.nodes && g.edges) {
+        applyGraph(g);
+        if (g.summary) G.summary = g.summary;
+        G.txt = G.txt.slice(G.sent);
+        G.sent = 0;
+      }
+      clearDegraded();
+      break;
+    } catch(e) {
+      console.error('LLM:', e);
+      if (e.statusCode === 429 || e.statusCode === 503) {
+        enterDegraded(e.statusCode === 429 ? 'Rate limited by API' : 'Circuit breaker open');
+        break;
+      }
+      if ((e.statusCode === 0 || e.statusCode >= 500) && attempt < MAX_RETRIES) continue;
+      if (attempt === MAX_RETRIES) {
+        enterDegraded('API errors after retries');
+      } else {
+        status('', 'Analysis failed');
+        setTimeout(() => { if (!G.paused && !G.degraded) status('on', listeningLabel()); }, 5000);
+      }
+      break;
+    }
   }
 
   G.busy = false;
+  if (!G.paused && !G.degraded) status('on', listeningLabel());
+}
+
+function enterDegraded(reason) {
+  G.degraded = true;
+  G.degradedReason = reason;
+  status('warn', 'Mind map paused \u2014 ' + reason);
+  const backoff = reason.includes('Rate limited') ? 30000 : 15000;
+  if (G.degradedRecoveryTimer) clearTimeout(G.degradedRecoveryTimer);
+  G.degradedRecoveryTimer = setTimeout(attemptRecovery, backoff);
+}
+
+function clearDegraded() {
+  if (!G.degraded) return;
+  G.degraded = false;
+  G.degradedReason = '';
+  if (G.degradedRecoveryTimer) { clearTimeout(G.degradedRecoveryTimer); G.degradedRecoveryTimer = null; }
+}
+
+function attemptRecovery() {
+  G.degraded = false;
+  G.degradedReason = '';
+  G.degradedRecoveryTimer = null;
   if (!G.paused) status('on', listeningLabel());
 }
 
@@ -563,6 +805,9 @@ function applyGraph(g) {
       vx: o ? o.vx : 0, vy: o ? o.vy : 0,
       isNew: !prev.has(n.id),
       color: color(n.group),
+      pinned: n.pinned || false,
+      importance: n.importance || 0,
+      state: n.state || 'active',
     };
   });
 
@@ -600,6 +845,59 @@ function logConcept(label, col) {
   box.scrollTop = box.scrollHeight;
 }
 
+// ─── Context menu ───
+function showContextMenu(event, d) {
+  event.preventDefault();
+  G._ctxNode = d;
+  const menu = document.getElementById('ctx-menu');
+  menu.style.display = 'block';
+  menu.style.left = event.clientX + 'px';
+  menu.style.top = event.clientY + 'px';
+  // Update pin label
+  const pinBtn = menu.querySelector('[data-action="pin"]');
+  pinBtn.textContent = d.pinned ? 'Unpin' : 'Pin';
+  // If in merge mode, show target state
+  if (G.mergeSource) {
+    menu.style.display = 'none';
+    if (G.mergeSource.id !== d.id) {
+      execAction('merge', {source_id: G.mergeSource.id, target_id: d.id});
+      gNode.selectAll('.merge-source').classed('merge-source', false);
+      G.mergeSource = null;
+    }
+  }
+}
+
+document.addEventListener('click', () => {
+  document.getElementById('ctx-menu').style.display = 'none';
+});
+
+document.querySelectorAll('#ctx-menu button').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const action = btn.dataset.action;
+    const node = G._ctxNode;
+    if (!node) return;
+    document.getElementById('ctx-menu').style.display = 'none';
+
+    if (action === 'rename') {
+      const newLabel = prompt('Rename node:', node.label);
+      if (newLabel && newLabel.trim()) {
+        execAction('rename', {node_id: node.id, label: newLabel.trim()});
+      }
+    } else if (action === 'merge') {
+      G.mergeSource = node;
+      gNode.selectAll('.n-group').filter(d => d.id === node.id).classed('merge-source', true);
+      status('think', 'Click target node to merge into...');
+    } else if (action === 'pin') {
+      execAction('pin', {node_id: node.id});
+    } else if (action === 'hide') {
+      execAction('hide', {node_id: node.id});
+    } else if (action === 'promote') {
+      execAction('promote', {node_id: node.id});
+    }
+  });
+});
+
 // ─── D3 Viz ───
 let svg, sim, gEdge, gNode, W, H;
 
@@ -608,10 +906,8 @@ function initViz() {
   W = wrap.clientWidth; H = wrap.clientHeight;
   svg = d3.select('#viz').attr('width', W).attr('height', H);
 
-  // ── Defs ──
   const defs = svg.append('defs');
 
-  // Glow filter
   const glow = defs.append('filter').attr('id','glow')
     .attr('x','-50%').attr('y','-50%').attr('width','200%').attr('height','200%');
   glow.append('feGaussianBlur').attr('stdDeviation','5').attr('result','b');
@@ -619,7 +915,6 @@ function initViz() {
   fm.append('feMergeNode').attr('in','b');
   fm.append('feMergeNode').attr('in','SourceGraphic');
 
-  // Soft halo filter
   const halo = defs.append('filter').attr('id','halo')
     .attr('x','-200%').attr('y','-200%').attr('width','500%').attr('height','500%');
   halo.append('feGaussianBlur').attr('stdDeviation','30');
@@ -654,15 +949,9 @@ function render() {
   eData.exit().transition().duration(400).style('opacity',0).remove();
 
   const eEnter = eData.enter().append('g').attr('class','e-group').style('opacity',0);
-
-  eEnter.append('path')
-    .attr('class', d => 'edge-path' + (d.isNew ? ' fresh' : ''));
-
+  eEnter.append('path').attr('class', d => 'edge-path' + (d.isNew ? ' fresh' : ''));
   eEnter.append('text').attr('class','edge-text').text(d => d.label);
-
   eEnter.transition().duration(800).style('opacity',1);
-
-  // Update edge labels
   eData.select('.edge-text').text(d => d.label);
 
   // ── Nodes ──
@@ -670,47 +959,34 @@ function render() {
   nData.exit().transition().duration(400).style('opacity',0).attr('transform', d => `translate(${d.x},${d.y}) scale(0)`).remove();
 
   const nEnter = nData.enter().append('g')
-    .attr('class', d => 'n-group' + (d.isNew ? ' born' : ''))
+    .attr('class', d => 'n-group' + (d.isNew ? ' born' : '') + (d.pinned ? ' pinned' : ''))
     .style('opacity', d => d.isNew ? 0 : 1)
     .call(d3.drag()
       .on('start', (e,d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
       .on('drag', (e,d) => { d.fx=e.x; d.fy=e.y; })
       .on('end', (e,d) => { if (!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; })
-    );
+    )
+    .on('contextmenu', (e, d) => showContextMenu(e, d));
 
-  // Aura (bloom on birth)
   nEnter.append('circle').attr('class','n-aura')
     .attr('r', 45).attr('fill', d=>d.color).attr('filter','url(#halo)');
-
-  // Outer ring
   nEnter.append('circle').attr('class','n-outer')
     .attr('r', 24).attr('stroke', d=>d.color);
-
-  // Inner fill
   nEnter.append('circle').attr('class','n-inner')
     .attr('r', 20).attr('fill', d=>d.color);
-
-  // Bright core
   nEnter.append('circle').attr('class','n-dot')
     .attr('r', 3).attr('fill', d=>d.color).attr('filter','url(#glow)');
-
-  // Label
   nEnter.append('text').attr('class','n-label').attr('dy', 40).text(d=>d.label);
-
-  // Category
   nEnter.append('text').attr('class','n-cat').attr('dy', 52).text(d=>d.group);
 
-  // Animate new in
   nEnter.filter(d=>d.isNew).transition().duration(700).ease(d3.easeCubicOut).style('opacity',1);
 
-  // Clear birth class
   setTimeout(() => {
     gNode.selectAll('.born').classed('born', false);
     G.nodes.forEach(n => n.isNew = false);
     G.edges.forEach(e => e.isNew = false);
   }, 2000);
 
-  // Merge & update
   const merged = nEnter.merge(nData);
   merged.select('.n-label').text(d=>d.label);
   merged.select('.n-cat').text(d=>d.group);
@@ -718,6 +994,7 @@ function render() {
   merged.select('.n-inner').attr('fill', d=>d.color);
   merged.select('.n-dot').attr('fill', d=>d.color);
   merged.select('.n-aura').attr('fill', d=>d.color);
+  merged.classed('pinned', d => d.pinned);
 
   sim.nodes(G.nodes);
   sim.force('link').links(G.edges);
@@ -725,7 +1002,6 @@ function render() {
 }
 
 function tick() {
-  // Curved edges
   gEdge.selectAll('.edge-path').attr('d', d => {
     const dx = d.target.x - d.source.x;
     const dy = d.target.y - d.source.y;
@@ -749,9 +1025,25 @@ function listeningLabel() {
 // ─── Status ───
 function status(mode, text) {
   const led = document.getElementById('led');
-  led.className = 'led' + (mode === 'on' ? ' on' : mode === 'think' ? ' think' : '');
+  led.className = 'led' + (mode === 'on' ? ' on' : mode === 'think' ? ' think' : mode === 'warn' ? ' warn' : '');
   document.getElementById('pill-text').textContent = text;
 }
+
+// ─── FPS tracking ───
+let _fpsFrames = 0, _fpsLast = performance.now();
+function _fpsLoop() {
+  _fpsFrames++;
+  const now = performance.now();
+  if (now - _fpsLast >= 5000) {
+    const fps = Math.round(_fpsFrames / ((now - _fpsLast) / 1000));
+    _fpsFrames = 0; _fpsLast = now;
+    if (G.ws && G.ws.readyState === 1) {
+      G.ws.send(JSON.stringify({type: 'frontend_metrics', fps}));
+    }
+  }
+  requestAnimationFrame(_fpsLoop);
+}
+requestAnimationFrame(_fpsLoop);
 
 // ─── Ambient breathing ───
 setInterval(() => {
@@ -774,9 +1066,11 @@ const SAVE_KEY = 'livemind_session';
 function saveSession() {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
-      v: 1, ts: Date.now(), topic: G.topic,
+      v: 3, ts: Date.now(), topic: G.topic,
+      sessionId: G.sessionId, lastSeq: G.lastSeq,
       txt: G.txt, sent: G.sent, cmap: G.cmap, ci: G.ci,
-      nodes: G.nodes.map(n => ({id:n.id, label:n.label, group:n.group})),
+      summary: G.summary || '',
+      nodes: G.nodes.map(n => ({id:n.id, label:n.label, group:n.group, pinned:n.pinned})),
       edges: G.edges.map(e => ({
         source: typeof e.source === 'object' ? e.source.id : e.source,
         target: typeof e.target === 'object' ? e.target.id : e.target,
@@ -791,7 +1085,7 @@ function checkRestore() {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return;
     const data = JSON.parse(raw);
-    if (!data.v || Date.now() - data.ts > 4 * 3600 * 1000) return;
+    if ((!data.v || data.v < 2) || Date.now() - data.ts > 4 * 3600 * 1000) return;
     const age = Math.round((Date.now() - data.ts) / 60000);
     const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
     document.getElementById('restore-info').textContent =
@@ -801,16 +1095,20 @@ function checkRestore() {
 }
 
 function restoreSession(data) {
-  G.txt  = data.txt  || '';
-  G.sent = data.sent || 0;
-  G.cmap = data.cmap || {};
-  G.ci   = data.ci   || 0;
+  G.txt     = data.txt     || '';
+  G.sent    = data.sent    || 0;
+  G.cmap    = data.cmap    || {};
+  G.ci      = data.ci      || 0;
+  G.summary = data.summary || '';
+  G.sessionId = data.sessionId || null;
+  G.lastSeq = data.lastSeq || 0;
   G.nodes = (data.nodes || []).map(n => ({
     ...n,
     x: W / 2 + (Math.random() - .5) * 300,
     y: H / 2 + (Math.random() - .5) * 300,
     vx: 0, vy: 0, isNew: false,
     color: G.cmap[n.group] || C.colors[0],
+    pinned: n.pinned || false,
   }));
   G.edges = (data.edges || []);
   if (G.txt) {
@@ -826,7 +1124,7 @@ function restoreSession(data) {
 }
 
 // ─── Init ───
-document.getElementById('start-btn').addEventListener('click', () => {
+document.getElementById('start-btn').addEventListener('click', async () => {
   G.topic = document.getElementById('f-topic').value.trim();
   G.wsUrl = document.getElementById('f-ws').value.trim();
 
@@ -839,6 +1137,11 @@ document.getElementById('start-btn').addEventListener('click', () => {
   const savedRaw = localStorage.getItem(SAVE_KEY);
   if (savedRaw && document.getElementById('restore-check').checked) {
     try { restoreSession(JSON.parse(savedRaw)); } catch(e) {}
+  }
+
+  // Create server session if not restoring one
+  if (!G.sessionId && G.wsUrl) {
+    await createSession();
   }
 
   connectWS();
@@ -862,9 +1165,16 @@ document.getElementById('c-pause').addEventListener('click', () => {
   status(G.paused ? '' : 'on', G.paused ? 'Paused' : 'Listening');
 });
 
-document.getElementById('c-reset').addEventListener('click', () => {
-  if (!confirm('Reset the mind map?')) return;
-  G.nodes=[]; G.edges=[]; G.txt=''; G.sent=0; G.ci=0; G.cmap={};
+document.getElementById('c-new').addEventListener('click', async () => {
+  if (!confirm('End this session and start fresh?\nAll data from this session is saved on the server.')) return;
+  await startFreshSession();
+});
+
+document.getElementById('c-reset').addEventListener('click', async () => {
+  if (!confirm('Reset the mind map? Session data is preserved on the server.')) return;
+  await endCurrentSession();
+  G.nodes=[]; G.edges=[]; G.txt=''; G.sent=0; G.ci=0; G.cmap={}; G.summary='';
+  G.sessionId=null; G.lastSeq=0; G.mergeSource=null;
   gEdge.selectAll('*').remove();
   gNode.selectAll('*').remove();
   document.getElementById('transcript-box').innerHTML = '';

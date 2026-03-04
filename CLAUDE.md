@@ -9,32 +9,53 @@ Live Mind Map: a real-time meeting/conversation visualizer. Microphone audio →
 ## Running the Project
 
 ```bash
-# Start the STT backend (must be running before browser connects)
 source .venv/bin/activate
-python3 stt_server.py
+python app.py -d <device_index>
 
-# Frontend: open live-mindmap.html directly in a browser (no build step)
+# Or interactive device picker:
+python app.py
 ```
 
-There is no build system. The frontend is a single self-contained HTML file using CDN-hosted D3.js. The Python backend uses the `.venv` virtual environment.
+Server starts at `http://localhost:8765`. Open `/` for the main UI, `/admin` for the monitoring dashboard. No build step needed — the frontend is served by FastAPI.
 
 ## Architecture
 
-Two loosely coupled components:
+```
+app.py              — FastAPI server: WS + REST routes, Claude proxy, broadcast/snapshot loops
+stt_worker.py       — Audio capture + VAD + Kyutai STT inference (background threads)
+db.py               — SQLite persistence (sessions, segments, snapshots, actions)
+reconciler.py       — Deterministic graph reconciler (scoring, decay, budget enforcement)
+live-mindmap.html   — Frontend: D3.js mind map + transcript sidebar + context menu
+admin.html          — Monitoring dashboard: STT, Claude, graph churn metrics
+requirements.txt    — Python dependencies
+```
 
-**`stt_server.py`** — Python WebSocket server (`ws://localhost:8765`)
-- Captures microphone audio at 24kHz mono via `sounddevice`
-- Runs Kyutai STT inference (`moshi_mlx`) on 8-second chunks with 1-second overlap
-- `_overlap()` deduplicates transcript segments at chunk boundaries
-- Broadcasts transcribed text to all connected browser clients
+**`app.py`** — FastAPI server (`http://localhost:8765`)
+- Lifespan: initializes DB, starts STT pipeline, spawns broadcast + snapshot loops
+- `GET /` serves `live-mindmap.html`, `GET /admin` serves `admin.html`
+- `WS /ws`: transcript streaming, Claude proxy, session reconnect, metrics
+- `POST /v1/sessions`: create session in SQLite
+- `GET /v1/sessions/{id}/restore?from_seq=N`: snapshot + segments since N
+- `POST /v1/sessions/{id}/actions`: pin/hide/rename/merge/promote → reconciler
+- `GET /v1/metrics`: REST polling for admin metrics
+- Claude proxy runs reconciler on responses; stores snapshots in DB
 
-**`live-mindmap.html`** — Single-page frontend
-- Setup panel collects Claude API key, meeting topic, and STT server URL
-- Connects to STT server via WebSocket; streams transcript text into sidebar
-- Every 20 seconds, sends accumulated transcript to Claude (`claude-sonnet-4-20250514`) via direct REST call from the browser
-- Claude returns a JSON graph structure (nodes + edges, max 30 nodes)
-- D3.js force-directed graph animates concept births, deaths, and repositioning
-- Node colors encode concept category (10-color palette defined at top of script)
+**`stt_worker.py`** — Audio capture + STT
+- `VAD` class: energy-based voice activity detection with hysteresis
+- `select_input_device()`: interactive mic picker
+- `start_stt_pipeline()`: spawns capture + STT threads, returns shutdown event
+- Captures at native rate, resamples to 24kHz, emits partials every ~320ms
+
+**`db.py`** — SQLite with WAL mode
+- Tables: `sessions`, `segments`, `snapshots`, `actions`
+- All async via `aiosqlite`
+- DB file: `livemind.db` (auto-created on first run)
+
+**`reconciler.py`** — Graph lifecycle management
+- Node states: active → parked (12min decay) → archived/hidden
+- Scoring: `0.45*recency + 0.35*frequency + 0.20*centrality + pin_bonus`
+- Budget: max 24 active nodes, parks lowest-scoring non-pinned
+- User actions: pin, hide, rename, merge, promote
 
 ## Key Configuration (in `live-mindmap.html`)
 
@@ -49,31 +70,50 @@ Located in the `C` object at the top of the `<script>` block:
 
 The global `G` object holds all mutable state. Key fields:
 - `G.txt`: full accumulated transcript string
-- `G.sent`: character offset — only `G.txt.slice(G.sent)` is sent as "new segment" each Claude call; advances after a successful response
+- `G.sent`: character offset — only `G.txt.slice(G.sent)` is sent as "new segment" each Claude call
 - `G.nodes` / `G.edges`: current graph state fed into D3 simulation
 - `G.cmap` / `G.ci`: group→color assignment, persists across graph updates
+- `G.sessionId` / `G.lastSeq`: server session tracking for reconnect
+- `G.mergeSource`: merge mode state for node merging
+- `G._ctxNode`: context menu target node
 
-STT fallback: if the STT server URL is left blank (or the WebSocket fails), `fallbackMic()` activates the browser's Web Speech API (`webkitSpeechRecognition`). Works in Chrome without `stt_server.py`.
+Context menu: right-click a node for Pin/Unpin, Promote, Rename, Merge, Hide.
 
-WebSocket message protocol (server → browser):
-- `{"type":"transcript","text":"...","timestamp":1234567890}` — new transcribed text
+STT fallback: if the STT server URL is left blank (or the WebSocket fails), `fallbackMic()` activates the browser's Web Speech API.
+
+FPS tracking: reports `frontend_metrics` over WS every 5s.
+
+## WebSocket Message Protocol
+
+Server → browser:
+- `{"type":"transcript","text":"...","seq":N,"timestamp":T}` — final transcript
+- `{"type":"partial_transcript","text":"...","seq":N,"timestamp":T}` — partial
+- `{"type":"claude_response","status":200,"data":{...},"req_id":"..."}` — Claude result (reconciled)
+- `{"type":"graph_update","graph":{...}}` — graph update from user action
+- `{"type":"restore","snapshot":{...},"segments":[...],"restore_ms":N}` — session restore
 - `{"type":"status","status":"connected","message":"..."}` — connection status
-- `{"type":"pong"}` — keepalive response
+- `{"type":"metrics",...}` — metrics response
+- `{"type":"pong"}` — keepalive
 
-Claude is sent the full transcript plus the current graph; it returns `{"nodes":[...],"edges":[...]}`. `applyGraph()` diffs against the existing node set using node IDs to preserve D3 positions.
+Browser → server:
+- `{"type":"ping"}` — keepalive
+- `{"type":"get_metrics"}` — request metrics
+- `{"type":"claude_request","req_id":"...","body":{...}}` — Claude API proxy
+- `{"type":"connect_session","session_id":"...","last_seq":N}` — reconnect with cursor
+- `{"type":"frontend_metrics","fps":N}` — FPS report
 
 ## Troubleshooting Audio
 
 - **macOS mic permission**: System Settings > Privacy & Security > Microphone > enable for Terminal
 - **Mic input level**: System Settings > Sound > Input — turn up input volume if RMS stays below 0.01 when speaking
-- `stt_server.py` prints RMS every 5s; speech should read ~0.05–0.2. Values near 0 mean audio isn't reaching the process.
-- The server captures at the device's native sample rate (typically 44100 Hz) and resamples to 24000 Hz internally — do not change `SAMPLE_RATE` in the InputStream call.
+- The server prints RMS every 5s; speech should read ~0.05–0.2.
+- Audio is captured at the device's native sample rate and resampled to 24kHz internally.
 
 ## Python Dependencies
 
-All installed in `.venv`:
-- `moshi_mlx` — Kyutai STT model (MLX, Apple Silicon)
-- `sounddevice` — audio capture
-- `websockets` — WebSocket server
-- `numpy` — audio buffer processing
-- `huggingface_hub` — model download on first run
+Defined in `requirements.txt`. Install with:
+```bash
+pip install -r requirements.txt
+```
+
+Key packages: `fastapi`, `uvicorn`, `aiosqlite`, `aiohttp`, `moshi_mlx`, `sounddevice`, `numpy`, `huggingface-hub`, `sentencepiece`

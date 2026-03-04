@@ -1,0 +1,9 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+aiosqlite>=0.21.0
+aiohttp>=3.11.0
+sounddevice>=0.5.0
+numpy>=2.0.0
+moshi_mlx>=0.3.0
+huggingface-hub>=0.28.0
+sentencepiece>=0.2.0

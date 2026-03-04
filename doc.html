@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Mind Map — Documentation</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=IBM+Plex+Mono:wght@300;400;500&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #060610;
+  --panel: #0a0b14;
+  --card: rgba(255,255,255,0.03);
+  --bdr: rgba(255,255,255,0.06);
+  --txt: #c8cad4;
+  --dim: #484b5e;
+  --bright: #eeeef2;
+  --green: #34d399;
+  --purple: #a78bfa;
+  --rose: #fb7185;
+  --amber: #fbbf24;
+  --blue: #60a5fa;
+  --cyan: #22d3ee;
+}
+
+body {
+  background: var(--bg);
+  color: var(--txt);
+  font-family: 'DM Sans', sans-serif;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Layout ─── */
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 64px 32px 120px;
+}
+
+/* ─── Header ─── */
+.doc-header {
+  margin-bottom: 64px;
+}
+.doc-header .tag {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 3px; text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 12px;
+}
+.doc-header h1 {
+  font-size: 36px; font-weight: 300;
+  color: var(--bright);
+  letter-spacing: -0.5px;
+  margin-bottom: 12px;
+}
+.doc-header .subtitle {
+  font-size: 16px; color: var(--dim);
+  font-weight: 300;
+}
+
+/* ─── Nav ─── */
+.doc-nav {
+  position: sticky; top: 0;
+  background: rgba(6,6,16,0.92);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--bdr);
+  padding: 14px 0;
+  margin: 0 -32px 48px;
+  padding-left: 32px; padding-right: 32px;
+  z-index: 50;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.doc-nav a {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 1px; text-transform: uppercase;
+  color: var(--dim);
+  text-decoration: none;
+  padding: 5px 12px;
+  border: 1px solid var(--bdr);
+  border-radius: 100px;
+  transition: all .2s;
+}
+.doc-nav a:hover { border-color: var(--green); color: var(--green); }
+
+/* ─── Sections ─── */
+section { margin-bottom: 56px; }
+
+h2 {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px; font-weight: 400;
+  letter-spacing: 3px; text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--bdr);
+}
+
+h3 {
+  font-size: 18px; font-weight: 500;
+  color: var(--bright);
+  margin: 28px 0 10px;
+}
+
+p { margin-bottom: 14px; font-size: 15px; }
+
+/* ─── Lists ─── */
+ul, ol {
+  margin: 10px 0 18px 20px;
+  font-size: 15px;
+}
+li { margin-bottom: 6px; }
+
+/* ─── Code ─── */
+code {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  background: rgba(255,255,255,0.04);
+  padding: 2px 7px;
+  border-radius: 4px;
+  color: var(--purple);
+}
+
+pre {
+  background: var(--panel);
+  border: 1px solid var(--bdr);
+  border-radius: 8px;
+  padding: 18px 20px;
+  margin: 14px 0 20px;
+  overflow-x: auto;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--txt);
+}
+
+/* ─── Keyboard shortcuts ─── */
+kbd {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px; font-weight: 500;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  padding: 2px 8px;
+  color: var(--bright);
+  white-space: nowrap;
+}
+
+/* ─── Cards ─── */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 14px 0 20px;
+}
+.doc-card {
+  background: var(--panel);
+  border: 1px solid var(--bdr);
+  border-radius: 10px;
+  padding: 18px;
+}
+.doc-card .card-title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 8px;
+}
+.doc-card .card-body {
+  font-size: 14px;
+  color: var(--bright);
+}
+
+/* ─── Tables ─── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0 20px;
+  font-size: 14px;
+}
+th {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; font-weight: 400;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--dim);
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--bdr);
+}
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+
+/* ─── Callouts ─── */
+.callout {
+  border-left: 3px solid var(--green);
+  padding: 14px 18px;
+  margin: 14px 0 20px;
+  background: rgba(52,211,153,0.04);
+  border-radius: 0 8px 8px 0;
+  font-size: 14px;
+}
+.callout.warn {
+  border-color: var(--amber);
+  background: rgba(251,191,36,0.04);
+}
+
+/* ─── Links ─── */
+a { color: var(--green); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ─── Accent dots ─── */
+.dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.dot.green { background: var(--green); }
+.dot.purple { background: var(--purple); }
+.dot.amber { background: var(--amber); }
+.dot.rose { background: var(--rose); }
+.dot.blue { background: var(--blue); }
+
+/* ─── Back link ─── */
+.back-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px; letter-spacing: 0.5px;
+  color: var(--dim);
+  text-decoration: none;
+  margin-bottom: 24px;
+  transition: color .2s;
+}
+.back-link:hover { color: var(--green); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<a class="back-link" href="/">&larr; Back to Live Mind Map</a>
+
+<div class="doc-header">
+  <div class="tag">Documentation</div>
+  <h1>Live Mind Map</h1>
+  <div class="subtitle">Real-time conversation visualization powered by local STT and Claude AI</div>
+</div>
+
+<nav class="doc-nav">
+  <a href="#getting-started">Getting Started</a>
+  <a href="#interface">Interface</a>
+  <a href="#interactions">Interactions</a>
+  <a href="#sessions">Sessions</a>
+  <a href="#admin">Admin</a>
+  <a href="#troubleshooting">Troubleshooting</a>
+</nav>
+
+<!-- ═══════════════════════════════════════ -->
+<section id="getting-started">
+<h2>Getting Started</h2>
+
+<h3>Requirements</h3>
+<ul>
+  <li>Mac with Apple Silicon (M1/M2/M3/M4) for local speech-to-text</li>
+  <li>Python 3.11+ with a virtual environment</li>
+  <li>An <a href="https://console.anthropic.com/">Anthropic API key</a></li>
+  <li>A microphone (built-in or external)</li>
+</ul>
+
+<h3>Setup</h3>
+<pre>
+# Clone and enter the project
+cd livemind2
+
+# Create virtual environment and install dependencies
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Add your API key
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env</pre>
+
+<h3>Start the server</h3>
+<pre>
+source .venv/bin/activate
+python app.py</pre>
+
+<p>The server will ask you to pick a microphone, then start at <code>http://localhost:8765</code>.</p>
+
+<div class="card-grid">
+  <div class="doc-card">
+    <div class="card-title">Main UI</div>
+    <div class="card-body"><a href="/">localhost:8765/</a></div>
+  </div>
+  <div class="doc-card">
+    <div class="card-title">Admin Panel</div>
+    <div class="card-body"><a href="/admin">localhost:8765/admin</a></div>
+  </div>
+  <div class="doc-card">
+    <div class="card-title">This Page</div>
+    <div class="card-body"><a href="/doc">localhost:8765/doc</a></div>
+  </div>
+</div>
+
+<h3>First run</h3>
+<ol>
+  <li>Open <a href="/">localhost:8765</a> in your browser</li>
+  <li>Optionally enter a meeting topic (helps the AI focus)</li>
+  <li>Click <strong>Connect</strong></li>
+  <li>Start talking — you'll see live transcription in the sidebar</li>
+  <li>After ~20 seconds of speech, the first concept map will appear</li>
+</ol>
+
+<div class="callout">
+  <strong>Tip:</strong> The first analysis takes a moment while the AI processes the initial transcript.
+  After that, the map updates every 20 seconds automatically.
+</div>
+</section>
+
+<!-- ═══════════════════════════════════════ -->
+<section id="interface">
+<h2>Interface Guide</h2>
+
+<h3>The Map</h3>
+<p>The main canvas shows a force-directed graph. Each node is a concept extracted from the conversation. Edges show relationships between concepts. Nodes are coloured by category — the AI assigns these automatically.</p>
+
+<ul>
+  <li><span class="dot green"></span><strong>Nodes</strong> — represent key concepts, ideas, or topics</li>
+  <li><strong>Edges</strong> — show relationships (e.g. "drives", "enables", "part of")</li>
+  <li><strong>Colours</strong> — group related concepts by category</li>
+  <li><strong>Labels</strong> — concept name (large) and category (small, uppercase)</li>
+</ul>
+
+<h3>Status Pill</h3>
+<p>Top-left corner shows the current state:</p>
+<table>
+  <tr><th>LED</th><th>Meaning</th></tr>
+  <tr><td><span class="dot green"></span> Green pulse</td><td>Listening — audio is being captured and transcribed</td></tr>
+  <tr><td><span class="dot purple"></span> Purple fast pulse</td><td>Mapping — AI is analysing the latest transcript</td></tr>
+  <tr><td><span class="dot amber"></span> Amber pulse</td><td>Degraded — API issue, transcript still flowing, map on hold</td></tr>
+  <tr><td><span class="dot" style="background:var(--dim)"></span> Grey</td><td>Disconnected or paused</td></tr>
+</table>
+
+<h3>Sidebar</h3>
+<ul>
+  <li><strong>Transcript</strong> — scrolling live text. Latest chunk is highlighted, older text fades. Italic text = partial (still being transcribed).</li>
+  <li><strong>Concepts</strong> — chronological list of all concepts that have appeared</li>
+  <li><strong>Controls</strong> — Pause, New Session, Reset</li>
+</ul>
+
+<h3>Counter</h3>
+<p>Bottom-left shows the current number of active concepts on the map.</p>
+</section>
+
+<!-- ═══════════════════════════════════════ -->
+<section id="interactions">
+<h2>Interactions</h2>
+
+<h3>Drag nodes</h3>
+<p>Click and drag any node to reposition it. The physics simulation will settle around the new position. Release to let it float freely again.</p>
+
+<h3>Context menu</h3>
+<p>Right-click (or long-press on trackpad) any node to open the context menu:</p>
+
+<table>
+  <tr><th>Action</th><th>What it does</th></tr>
+  <tr><td><strong>Pin / Unpin</strong></td><td>Pinned nodes never get automatically removed, even if the conversation moves on. Their ring becomes thicker.</td></tr>
+  <tr><td><strong>Promote</strong></td><td>Boosts a node's importance score. Useful for reactivating a parked concept or keeping something visible.</td></tr>
+  <tr><td><strong>Rename</strong></td><td>Change the label. Opens a prompt dialog.</td></tr>
+  <tr><td><strong>Merge into...</strong></td><td>Starts merge mode. Click a second node to merge the first into it. Combines mention counts, redirects all edges. Great for deduplication.</td></tr>
+  <tr><td><strong>Hide</strong></td><td>Immediately removes the node from the map. It won't come back unless the conversation mentions it heavily again.</td></tr>
+</table>
+
+<h3>Merge mode</h3>
+<p>After clicking "Merge into...", the source node gets a dashed ring. Click any other node to complete the merge. The source is absorbed into the target — all its connections and history transfer over.</p>
+
+<div class="callout warn">
+  <strong>Note:</strong> Merge cannot be undone in the current session. The source node is archived permanently.
+</div>
+
+<h3>How the map stays clean</h3>
+<p>The system automatically manages complexity:</p>
+<ul>
+  <li><strong>Budget:</strong> Maximum 24 active nodes at a time. If the conversation generates more, the least important ones are "parked" (removed from view but remembered).</li>
+  <li><strong>Decay:</strong> Nodes not mentioned for 12 minutes are automatically parked.</li>
+  <li><strong>Reactivation:</strong> If a parked concept gets mentioned 2+ times within 3 minutes, it comes back.</li>
+  <li><strong>Scoring:</strong> Every node has an importance score based on how recently it was mentioned (45%), how often (35%), and how connected it is (20%). Pinned nodes get a bonus.</li>
+</ul>
+</section>
+
+<!-- ═══════════════════════════════════════ -->
+<section id="sessions">
+<h2>Sessions</h2>
+
+<h3>What gets saved</h3>
+<p>Everything. The server stores all session data in a local SQLite database (<code>livemind.db</code>):</p>
+<ul>
+  <li>Every transcript segment (partial and final)</li>
+  <li>Graph snapshots (every 60 seconds + after each AI analysis)</li>
+  <li>All user actions (pins, hides, renames, merges, promotes)</li>
+  <li>Session metadata (topic, start time, end time, summary)</li>
+</ul>
+
+<h3>Session controls</h3>
+<table>
+  <tr><th>Button</th><th>What it does</th></tr>
+  <tr><td><strong>Pause / Resume</strong></td><td>Stops transcription and AI analysis. The map freezes. Audio capture continues in the background so you won't miss anything when you resume.</td></tr>
+  <tr><td><strong>New Session</strong></td><td>Ends the current session (all data saved), clears the map and transcript, and starts a fresh session. Use this between meetings or topics.</td></tr>
+  <tr><td><strong>Reset</strong></td><td>Same as New Session but doesn't create a new one — returns to a blank state. The ended session's data is still in the database.</td></tr>
+</table>
+
+<h3>Reconnecting</h3>
+<p>If you lose connection (close the tab, browser crash, network hiccup), just reopen the page. If your previous session is less than 4 hours old, you'll see a restore banner on the setup screen. Check the box and click Connect to pick up where you left off.</p>
+
+<p>The server will send back the latest graph snapshot and any transcript segments you missed. The map rebuilds instantly.</p>
+
+<h3>Where is the data?</h3>
+<p>Session data lives in <code>livemind.db</code> in the project directory. This is a standard SQLite file — you can inspect it with any SQLite browser. Tables:</p>
+
+<table>
+  <tr><th>Table</th><th>Contents</th></tr>
+  <tr><td><code>sessions</code></td><td>Session ID, topic, timestamps, summary</td></tr>
+  <tr><td><code>segments</code></td><td>Every transcript chunk with sequence numbers</td></tr>
+  <tr><td><code>snapshots</code></td><td>Full graph state at points in time</td></tr>
+  <tr><td><code>actions</code></td><td>Every user interaction (pin, rename, etc.)</td></tr>
+</table>
+</section>
+
+<!-- ═══════════════════════════════════════ -->
+<section id="admin">
+<h2>Admin Panel</h2>
+
+<p>Open <a href="/admin">localhost:8765/admin</a> to monitor system health in real time.</p>
+
+<h3>Key metrics</h3>
+<table>
+  <tr><th>Card</th><th>What to watch</th></tr>
+  <tr><td><strong>STT Performance</strong></td><td>Seconds per chunk. The real-time factor should stay below 1.0x (green). Above 1.2x (red) means transcription can't keep up.</td></tr>
+  <tr><td><strong>Audio Buffer</strong></td><td>Seconds of audio waiting to be processed. Should stay near 0. High values mean lag.</td></tr>
+  <tr><td><strong>Claude API</strong></td><td>Response time and error count. Errors trigger the circuit breaker.</td></tr>
+  <tr><td><strong>E2E Latency</strong></td><td>Time from audio chunk capture to transcript delivery.</td></tr>
+  <tr><td><strong>Pipeline Stats</strong></td><td>Chunks processed, silent chunks skipped, partials emitted.</td></tr>
+  <tr><td><strong>System</strong></td><td>Uptime, connected clients, audio levels, VAD state, circuit breaker status.</td></tr>
+  <tr><td><strong>Graph Churn</strong></td><td>Nodes added/removed per minute, edge changes, reconnects, frontend FPS.</td></tr>
+</table>
+
+<h3>VAD (Voice Activity Detection)</h3>
+<p>The server uses energy-based voice activity detection. When no one is speaking, audio chunks are skipped entirely — saving processing time and reducing noise. The admin panel shows whether the VAD thinks someone is currently speaking.</p>
+
+<h3>Circuit breaker</h3>
+<p>If the Claude API returns errors or rate limits, the circuit breaker opens. While open, no API calls are made. It automatically retries after a backoff period (starts at 5s, doubles up to 60s). The admin panel shows the current state: <span style="color:var(--green)">closed</span> (healthy), <span style="color:var(--amber)">open</span> (backing off), or half_open (testing recovery).</p>
+</section>
+
+<!-- ═══════════════════════════════════════ -->
+<section id="troubleshooting">
+<h2>Troubleshooting</h2>
+
+<h3>No audio / RMS stays at 0</h3>
+<ul>
+  <li>macOS: System Settings &rarr; Privacy &amp; Security &rarr; Microphone &rarr; enable for Terminal</li>
+  <li>System Settings &rarr; Sound &rarr; Input &rarr; increase input volume</li>
+  <li>Make sure you selected the right device when the server started</li>
+  <li>Restart the server with <code>python app.py -d N</code> to force a specific device index</li>
+</ul>
+
+<h3>Map not updating</h3>
+<ul>
+  <li>Check the status pill — if amber, the API is having issues. It will auto-recover.</li>
+  <li>Make sure your <code>.env</code> file has a valid <code>ANTHROPIC_API_KEY</code></li>
+  <li>Check the admin panel for Claude API errors</li>
+  <li>The map needs at least 50 characters of new text before triggering an analysis</li>
+</ul>
+
+<h3>Browser fallback</h3>
+<p>If you leave the STT server URL blank on the setup screen (or if the WebSocket connection fails), the system falls back to your browser's built-in speech recognition. This works in Chrome without needing the Python server, but is less accurate and doesn't support partial transcripts.</p>
+
+<h3>High latency / audio buffer growing</h3>
+<ul>
+  <li>Close other CPU-intensive apps — STT runs on the Neural Engine / GPU</li>
+  <li>Check the admin panel's real-time factor. If consistently above 1.0x, the model can't keep up with real-time audio</li>
+  <li>The server auto-skips ahead if the buffer grows too large (you'll see "catch-up" in the admin stats)</li>
+</ul>
+
+<h3>Database</h3>
+<p>If you need to start completely fresh (wipe all session history), delete <code>livemind.db</code> and restart the server. A new database will be created automatically.</p>
+</section>
+
+</div>
+</body>
+</html>

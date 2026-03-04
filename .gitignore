@@ -16,6 +16,11 @@ venv/
 .env
 .env.*
 
+# Database
+*.db
+*.db-shm
+*.db-wal
+
 # Logs and temp files
 *.log
 *.tmp
