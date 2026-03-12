@@ -262,6 +262,7 @@ canvas {
       <div class="hero-unit">sec / call</div>
     </div>
     <div class="hero-sub">Calls: <span id="claude-calls">0</span> &middot; Errors: <span id="claude-errors">0</span></div>
+    <div id="claude-last-error" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--rose);margin-top:8px;word-break:break-all;display:none;"></div>
     <div class="chart-wrap"><canvas id="chart-claude"></canvas></div>
   </div>
 
@@ -465,6 +466,9 @@ function update(m) {
   const cerrEl = document.getElementById('claude-errors');
   cerrEl.textContent = m.claude_errors || 0;
   cerrEl.style.color = (m.claude_errors || 0) > 0 ? 'var(--rose)' : 'var(--dim)';
+  const errBox = document.getElementById('claude-last-error');
+  if (m.claude_last_error) { errBox.textContent = m.claude_last_error; errBox.style.display = 'block'; }
+  else { errBox.style.display = 'none'; }
 
   // E2E latency
   const e2e = m.stt_e2e_last || 0;

@@ -69,6 +69,7 @@ metrics = {
     "nodes_removed_per_min": 0,
     "edge_churn_per_min": 0,
     "analysis_queue_depth": 0,
+    "claude_last_error": "",
 }
 metrics_lock = threading.Lock()
 
@@ -266,17 +267,20 @@ async def _proxy_claude(websocket: WebSocket, req: dict):
         now = time.time()
         if cb_state == "open":
             if now < cb_backoff_until:
+                wait = cb_backoff_until - now
+                print(f"  Claude: circuit breaker OPEN, retry in {wait:.0f}s", file=sys.stderr)
                 with metrics_lock:
                     metrics["cb_state"] = "open"
                 await websocket.send_json({
                     "type": "claude_response",
                     "status": 503,
-                    "data": {"error": "Circuit breaker open", "retry_after": cb_backoff_until - now},
+                    "data": {"error": "Circuit breaker open", "retry_after": wait},
                     "req_id": req.get("req_id"),
                 })
                 return
             else:
                 cb_state = "half_open"
+                print("  Claude: circuit breaker half_open, testing...")
                 with metrics_lock:
                     metrics["cb_state"] = "half_open"
 
@@ -302,6 +306,7 @@ async def _proxy_claude(websocket: WebSocket, req: dict):
                     metrics["claude_avg_duration"] = metrics["claude_total_time"] / metrics["claude_calls"]
 
                 if resp.status == 200:
+                    print(f"  Claude: 200 OK ({dt:.1f}s)")
                     with cb_lock:
                         cb_state = "closed"
                         cb_failures = 0
@@ -309,6 +314,7 @@ async def _proxy_claude(websocket: WebSocket, req: dict):
                     with metrics_lock:
                         metrics["cb_state"] = "closed"
                         metrics["cb_failures"] = 0
+                        metrics["claude_last_error"] = ""
 
                     # Run reconciler on Claude's response
                     try:
@@ -318,28 +324,28 @@ async def _proxy_claude(websocket: WebSocket, req: dict):
                             graph = reconciler.reconcile(parsed)
                             if parsed.get("summary"):
                                 _summary = parsed["summary"]
-                            # Store snapshot
                             if _current_session_id:
                                 await db.store_snapshot(
                                     _current_session_id, _seq_counter,
                                     reconciler.get_full_state(), "analysis"
                                 )
-                            # Send reconciled graph instead of raw Claude output
                             data = {
                                 "content": [{"type": "text", "text": json.dumps({
                                     **graph, "summary": _summary,
                                 })}],
                             }
-                            # Update churn metrics
                             churn = reconciler.get_churn_metrics()
                             with metrics_lock:
                                 metrics["nodes_added_per_min"] = churn["nodes_added_per_min"]
                                 metrics["nodes_removed_per_min"] = churn["nodes_removed_per_min"]
                                 metrics["edge_churn_per_min"] = churn["edge_churn_per_min"]
-                    except (json.JSONDecodeError, KeyError):
-                        pass  # Let raw response through if parsing fails
+                    except (json.JSONDecodeError, KeyError) as parse_err:
+                        print(f"  Claude: response parse error: {parse_err}", file=sys.stderr)
+                        print(f"  Claude: raw text: {raw_text[:200]}", file=sys.stderr)
 
                 elif resp.status == 429:
+                    err_msg = data.get("error", {}).get("message", "Rate limited")
+                    print(f"  Claude: 429 RATE LIMITED ({dt:.1f}s) — {err_msg}", file=sys.stderr)
                     with cb_lock:
                         cb_state = "open"
                         cb_backoff_secs = min(cb_backoff_secs * 2, CB_MAX_BACKOFF)
@@ -349,7 +355,11 @@ async def _proxy_claude(websocket: WebSocket, req: dict):
                         metrics["claude_errors"] += 1
                         metrics["cb_state"] = "open"
                         metrics["cb_failures"] = cb_failures
+                        metrics["claude_last_error"] = f"429: {err_msg}"
+
                 elif resp.status >= 500:
+                    err_msg = data.get("error", {}).get("message", f"Server error {resp.status}")
+                    print(f"  Claude: {resp.status} SERVER ERROR ({dt:.1f}s) — {err_msg}", file=sys.stderr)
                     with cb_lock:
                         cb_failures += 1
                         if cb_failures >= CB_FAILURE_THRESHOLD:
@@ -360,9 +370,14 @@ async def _proxy_claude(websocket: WebSocket, req: dict):
                         metrics["claude_errors"] += 1
                         metrics["cb_state"] = cb_state
                         metrics["cb_failures"] = cb_failures
+                        metrics["claude_last_error"] = f"{resp.status}: {err_msg}"
+
                 else:
+                    err_msg = data.get("error", {}).get("message", f"HTTP {resp.status}")
+                    print(f"  Claude: {resp.status} ERROR ({dt:.1f}s) — {err_msg}", file=sys.stderr)
                     with metrics_lock:
                         metrics["claude_errors"] += 1
+                        metrics["claude_last_error"] = f"{resp.status}: {err_msg}"
 
                 await websocket.send_json({
                     "type": "claude_response",
@@ -371,6 +386,8 @@ async def _proxy_claude(websocket: WebSocket, req: dict):
                     "req_id": req.get("req_id"),
                 })
     except Exception as e:
+        dt = time.time() - t0
+        print(f"  Claude: EXCEPTION ({dt:.1f}s) — {type(e).__name__}: {e}", file=sys.stderr)
         with cb_lock:
             cb_failures += 1
             if cb_failures >= CB_FAILURE_THRESHOLD:
@@ -382,6 +399,7 @@ async def _proxy_claude(websocket: WebSocket, req: dict):
             metrics["claude_errors"] += 1
             metrics["cb_state"] = cb_state
             metrics["cb_failures"] = cb_failures
+            metrics["claude_last_error"] = f"{type(e).__name__}: {e}"
         await websocket.send_json({
             "type": "claude_response",
             "status": 500,
